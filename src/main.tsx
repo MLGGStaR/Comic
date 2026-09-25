@@ -1,7 +1,9 @@
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { cleanUpdateUrl } from './lib/update';
 import './index.css';
 
+cleanUpdateUrl();
 createRoot(document.getElementById('root')!).render(<App />);
 
 // Apps have no browser context menus: suppress long-press/right-click menus

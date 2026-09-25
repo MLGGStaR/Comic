@@ -8,6 +8,7 @@ import { loadProfiles, useProfiles } from '../state/profiles';
 import { useCollection } from '../state/collection';
 import { useNav } from '../state/nav';
 import { Icon } from '../ui/Icon';
+import { BUILD, latestBuild, reloadInto } from '../lib/update';
 
 export function SettingsSheet({ session, onClose }: { session: Session | null; onClose: () => void }) {
   const profiles = useProfiles();
@@ -108,7 +109,32 @@ export function SettingsSheet({ session, onClose }: { session: Session | null; o
           Log in or create account
         </button>
       )}
-      <div className="text-center text-[10px] text-ink-2 mt-4">Longbox · build {String(import.meta.env.VITE_BUILD_ID ?? 'dev').slice(0, 7)}</div>
+      <UpdateRow />
     </Sheet>
+  );
+}
+
+/** Which version this is, and a way to pull the newest one right now
+ *  (it also updates by itself whenever you open the app). */
+function UpdateRow() {
+  const [state, setState] = useState<'idle' | 'checking' | 'latest' | 'offline' | 'updating'>('idle');
+  const check = async () => {
+    setState('checking');
+    const latest = await latestBuild();
+    if (!latest) return setState('offline');
+    if (!BUILD || latest === BUILD) return setState('latest');
+    setState('updating');
+    await reloadInto(latest);
+  };
+  return (
+    <div className="flex items-center justify-between gap-3 mt-4 px-1 text-[11px]">
+      <span className="text-ink-2">
+        Longbox · version {BUILD ? BUILD.slice(0, 7) : 'dev'}
+        {state === 'latest' ? <span className="text-lb-green"> · up to date</span> : state === 'offline' ? <span className="text-amber-300"> · offline</span> : null}
+      </span>
+      <button onClick={() => void check()} disabled={state === 'checking' || state === 'updating'} className="font-semibold text-lb-blue disabled:opacity-60">
+        {state === 'checking' ? 'Checking…' : state === 'updating' ? 'Updating…' : 'Check for updates'}
+      </button>
+    </div>
   );
 }

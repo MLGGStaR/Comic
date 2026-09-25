@@ -8,6 +8,7 @@ import { collection, useCollection } from './state/collection';
 import { loadFollows } from './state/follows';
 import { portfolio } from './lib/shelf';
 import { migrateValues } from './state/values';
+import { BUILD, checkForUpdate } from './lib/update';
 import { recordValue } from './ui/ValueSparkline';
 import { loadProfiles, useProfiles } from './state/profiles';
 import { refreshAll } from './state/refresh';
@@ -110,36 +111,19 @@ function Shell() {
     return () => window.clearTimeout(t);
   }, [selfId, collectionLoaded, myEntries]);
 
-  // ── auto-update: a new deploy reloads the app (90s cooldown) ──
+  // ── auto-update: a new deploy reloads the app (see lib/update) ──
   // Checked at launch and on every return to the foreground (reload right
   // away), and every minute while open — that one waits until nothing is
   // open or being typed in, so it never interrupts.
   useEffect(() => {
-    const mine = import.meta.env.VITE_BUILD_ID as string | undefined;
-    if (!mine) return;
+    if (!BUILD) return;
     const idle = () => !hasBack() && !document.activeElement?.closest?.('input, textarea');
-    const check = async (now: boolean) => {
-      try {
-        const r = await fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: 'no-store' });
-        if (!r.ok) return;
-        const { build } = (await r.json()) as { build?: string };
-        if (!build || String(build) === String(mine) || !(now || idle())) return;
-        const last = Number(sessionStorage.getItem('lbx-reload-at') ?? 0);
-        if (Date.now() - last < 90_000) return;
-        sessionStorage.setItem('lbx-reload-at', String(Date.now()));
-        const reg = await navigator.serviceWorker?.getRegistration();
-        await reg?.update().catch(() => {});
-        window.location.reload();
-      } catch {
-        // offline
-      }
-    };
-    void check(true);
+    void checkForUpdate({ foreground: true, idle });
     const onVis = () => {
-      if (document.visibilityState === 'visible') void check(true);
+      if (document.visibilityState === 'visible') void checkForUpdate({ foreground: true, idle });
     };
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void check(false);
+      if (document.visibilityState === 'visible') void checkForUpdate({ foreground: false, idle });
     }, 60_000);
     document.addEventListener('visibilitychange', onVis);
     return () => {
