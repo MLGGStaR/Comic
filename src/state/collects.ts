@@ -9,24 +9,32 @@ import type { Collects } from '../lib/shelf';
 import type { ComicLite, Entry } from '../types';
 
 let known = new Map<string, Collects>();
+const fetchedAt = new Map<string, number>(); // answers are re-asked after a while: the server keeps checking them online
 let loaded = false;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 const inflight = new Set<string>();
+const REASK = 3 * 86400e3;
 
 async function ensureLoaded() {
   if (loaded) return;
   loaded = true;
-  const cached = await idbGet<[string, Collects][]>('collects');
-  if (cached?.length) {
-    known = new Map([...cached, ...known]);
+  // only answers are kept on the phone; "unknown" is asked again next time
+  const cached = await idbGet<[string, Collects & { at?: number }][]>('collects');
+  const good = (cached ?? []).filter(([, c]) => c.issues);
+  if (good.length) {
+    for (const [k, c] of good) fetchedAt.set(k, c.at ?? 0);
+    known = new Map([...good.map(([k, c]) => [k, { collects: c.collects, issues: c.issues }] as [string, Collects]), ...known]);
     emit();
   }
 }
 
+const persist = () => void idbSet('collects', [...known.entries()].filter(([, c]) => c.issues).map(([k, c]) => [k, { ...c, at: fetchedAt.get(k) ?? 0 }]));
+
 async function fetchMissing(list: ComicLite[]) {
   await ensureLoaded();
-  const want = list.filter((c) => c.format === 'collection' && !known.has(c.id) && !inflight.has(c.id));
+  const stale = (id: string) => !known.has(id) || Date.now() - (fetchedAt.get(id) ?? 0) > REASK;
+  const want = list.filter((c) => c.format === 'collection' && stale(c.id) && !inflight.has(c.id));
   if (!want.length) return;
   const { data } = await supabase.auth.getSession();
   if (!data.session) return;
@@ -40,10 +48,14 @@ async function fetchMissing(list: ComicLite[]) {
     if (!r.ok) return;
     const got = (await r.json()) as Record<string, Collects>;
     const next = new Map(known);
-    for (const [k, v] of Object.entries(got)) next.set(k, v);
+    const t = Date.now();
+    for (const [k, v] of Object.entries(got)) {
+      next.set(k, v);
+      fetchedAt.set(k, v.issues ? t : 0); // unknown: ask again next session
+    }
     known = next;
     emit();
-    void idbSet('collects', [...known.entries()]);
+    persist();
   } catch {
     // try again next time
   } finally {

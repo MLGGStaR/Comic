@@ -28,6 +28,7 @@ if (!SITE) {
 const fails = [];
 const passes = [];
 let page = null;
+let looked = 0; // House of M TP: issues as looked up
 const check = async (name, fn) => {
   try {
     await fn();
@@ -211,15 +212,16 @@ try {
     await settle(700);
     await top.getByRole('button', { name: 'Read', exact: true }).click();
     const card = top.locator('div.rounded-2xl', { hasText: 'Collects' }).first();
-    await card.getByText('8 issues').waitFor({ timeout: 30000 });
+    await card.getByText(/^\d+ issues$/).waitFor({ timeout: 60000 });
+    looked = Number((await card.getByText(/^\d+ issues$/).innerText()).match(/\d+/)[0]);
     await card.getByText(/House of M #1.8/).waitFor({ timeout: 5000 });
     await card.getByRole('button', { name: 'Edit', exact: true }).click();
     await card.getByRole('button', { name: 'One fewer' }).click();
     await card.getByRole('button', { name: 'Save', exact: true }).click();
-    await card.getByText('7 issues').waitFor({ timeout: 5000 });
+    await card.getByText(`${looked - 1} issues`).waitFor({ timeout: 5000 });
     await page.waitForTimeout(2000);
     const rows = await (await fetch(`${BASE}/rest/v1/comic_entries?user_id=eq.${user.id}&comic_id=eq.6759046&select=read,issues`, { headers: H })).json();
-    if (!rows[0]?.read || rows[0]?.issues !== 7) throw new Error(`db row ${JSON.stringify(rows)}`);
+    if (!rows[0]?.read || rows[0]?.issues !== looked - 1) throw new Error(`db row ${JSON.stringify(rows)} (looked-up ${looked})`);
     await card.scrollIntoViewIfNeeded();
     await settle(300);
     await screen('07b-trade-collects');
@@ -257,10 +259,10 @@ try {
     await shelfTop.getByRole('button', { name: 'All', exact: true }).click();
     await page.locator('.screen-in').last().getByRole('button', { name: 'Back' }).click();
     await settle(500);
-    // Read: Absolute Batman #2 + House of M TP (your count: 7) = 2 comics, 8 issues
+    // Read: Absolute Batman #2 + House of M TP (your count: one fewer than looked up)
     await page.getByRole('button', { name: /^Read, / }).click();
     await page.locator('.screen-in').last().getByText('2 comics').waitFor({ timeout: 10000 });
-    await page.locator('.screen-in').last().getByText('8 issues').waitFor({ timeout: 10000 });
+    await page.locator('.screen-in').last().getByText(`${1 + looked - 1} issues`).waitFor({ timeout: 10000 });
     await settle(500);
     await screen('11c-shelf-read-issues');
     await page.locator('.screen-in').last().getByRole('button', { name: 'Back' }).click();

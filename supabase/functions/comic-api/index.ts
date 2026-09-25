@@ -10,7 +10,7 @@
 // Everything is normalised into the app's ComicLite / ComicDetail shapes and
 // cached in comic_cache so the sources see as few requests as possible.
 import { cached, cacheGet, cachePut, cacheGetMany, cachePutMany, customCoversFor, upcGet, upcPut } from '../_shared/cache.ts';
-import { readCover, coarseRank, fineMatch, byHints, classifyGenres, classifyCollects, DEFAULT_KNOBS, MODELS, type Candidate, type Collects, type CoverRead, type Model, type ScanKnobs } from './scan.ts';
+import { readCover, coarseRank, fineMatch, byHints, classifyGenres, classifyCollects, lookupCollectsOnline, DEFAULT_KNOBS, MODELS, type Candidate, type Collects, type CoverRead, type Model, type ScanKnobs } from './scan.ts';
 import { decodeBarcode } from '../_shared/barcode.ts';
 import { normalize, parseQuery, type ParsedQuery } from '../_shared/query.ts';
 import { splitTitle, rankSeries } from '../_shared/locg.ts';
@@ -213,29 +213,88 @@ async function seriesGenres(uid: string, series: { key: string; title: string; p
   return out;
 }
 
-// issues per collected edition: cached forever (unknowns too), only misses go to Claude
-async function collectedIssues(uid: string, items: { key: string; title: string; publisher: string | null; date: string | null }[]) {
-  const hits = await cacheGetMany<Collects>(items.map((i) => `collects:${i.key}`));
+// Issues per collected edition. First what the model knows (cheap, batched,
+// instant); then the web decides: editions the model doesn't know — usually
+// newer than its training — are looked up now, and every answer from memory
+// is checked online once in the background (the web wins). "Not found online
+// yet" is re-checked after two weeks (listings for new books appear later).
+type CollectsCache = Collects & { via?: 'knowledge' | 'web'; checked?: string; source?: string | null };
+type Item = { key: string; title: string; publisher: string | null; date: string | null };
+const RECHECK = 14 * DAY;
+
+/** Keep working after the response is sent (Supabase Edge Runtime). */
+function background(p: Promise<unknown>) {
+  const rt = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+  if (rt) rt.waitUntil(p);
+  else void p;
+}
+
+async function verifyOnline(batch: Item[], prior: Map<string, CollectsCache>) {
+  const found = await Promise.all(batch.map((b) => lookupCollectsOnline(b).catch(() => ({ collects: null, issues: null, source: null }))));
+  const checked = new Date().toISOString();
+  await cachePutMany(
+    batch.map((b, i) => ({
+      key: `collects:${b.key}`,
+      // the web's answer wins; when it finds nothing, the model's answer stays (marked checked)
+      data: found[i].issues ? { ...found[i], via: 'web', checked } : { ...(prior.get(b.key) ?? found[i]), checked },
+    })),
+  );
+  return found;
+}
+
+async function collectedIssues(uid: string, items: Item[]) {
+  const hits = await cacheGetMany<CollectsCache>(items.map((i) => `collects:${i.key}`));
   const out: Record<string, Collects> = {};
-  const missing = items.filter((i) => {
+  const answer = (key: string, c: Collects) => (out[key] = { collects: c.collects, issues: c.issues });
+  const prior = new Map<string, CollectsCache>();
+  const unseen: Item[] = [];
+  const online: Item[] = []; // no answer yet: look it up now
+  const verify: Item[] = []; // answered from memory: confirm online in the background
+  for (const i of items) {
     const c = hits.get(`collects:${i.key}`);
-    if (c) out[i.key] = c;
-    return !c;
-  });
-  if (missing.length) {
-    const hourKey = `rl:collects:${uid}:${new Date().toISOString().slice(0, 13)}`;
-    const used = (await cacheGet<number>(hourKey))?.data ?? 0;
-    if (used < 20) {
-      await cachePut(hourKey, used + 1);
-      for (let i = 0; i < missing.length; i += 30) {
-        const batch = missing.slice(i, i + 30);
-        const got = await classifyCollects(batch).catch(() => ({}) as Record<string, Collects>);
-        const rows = batch.filter((b) => got[b.key]).map((b) => ({ key: `collects:${b.key}`, data: got[b.key] }));
-        await cachePutMany(rows);
-        for (const b of batch) if (got[b.key]) out[b.key] = got[b.key];
+    if (c?.issues) {
+      answer(i.key, c);
+      if (!c.checked) {
+        prior.set(i.key, c);
+        verify.push(i);
       }
+    } else if (!c) unseen.push(i);
+    else if (!c.checked || Date.now() - Date.parse(c.checked) > RECHECK) online.push(i);
+    else answer(i.key, c); // not found online, checked recently
+  }
+
+  const hour = new Date().toISOString().slice(0, 13);
+  const budget = async (kind: string, max: number) => {
+    const key = `rl:${kind}:${uid}:${hour}`;
+    const used = (await cacheGet<number>(key))?.data ?? 0;
+    if (used >= max) return false;
+    await cachePut(key, used + 1);
+    return true;
+  };
+
+  if (unseen.length && (await budget('collects', 20))) {
+    for (let i = 0; i < unseen.length; i += 30) {
+      const batch = unseen.slice(i, i + 30);
+      const got = await classifyCollects(batch).catch(() => ({}) as Record<string, Collects>);
+      const known = batch.filter((b) => got[b.key]?.issues);
+      await cachePutMany(known.map((b) => ({ key: `collects:${b.key}`, data: { ...got[b.key], via: 'knowledge' } })));
+      for (const b of known) {
+        answer(b.key, got[b.key]);
+        prior.set(b.key, { ...got[b.key], via: 'knowledge' });
+        verify.push(b);
+      }
+      online.push(...batch.filter((b) => !got[b.key]?.issues));
     }
   }
+
+  // web lookups cost more: a few per request, in parallel
+  const now = online.slice(0, 6);
+  if (now.length && (await budget('collects-web', 8))) {
+    const found = await verifyOnline(now, prior);
+    now.forEach((b, i) => answer(b.key, found[i]));
+  }
+  const later = verify.slice(0, 6);
+  if (later.length && (await budget('collects-verify', 6))) background(verifyOnline(later, prior));
   return out;
 }
 

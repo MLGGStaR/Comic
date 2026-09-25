@@ -332,6 +332,63 @@ export async function classifyCollects(items: { key: string; title: string; publ
   return out;
 }
 
+/** An edition the model doesn't know (newer than its training): search the web
+ *  — publisher pages and shop listings say "Collects Absolute Batman #7–12".
+ *  Only an answer naming the issues counts. */
+export async function lookupCollectsOnline(item: { title: string; publisher: string | null; date: string | null }): Promise<Collects & { source: string | null }> {
+  const none = { collects: null, issues: null, source: null };
+  let messages: unknown[] = [
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: [
+            `Which single issues does this comic book collected edition reprint?`,
+            `Edition: ${item.title}${item.publisher ? ` — ${item.publisher}` : ''}${item.date ? `, released ${item.date}` : ''}`,
+            `Search the web: the publisher's page (dc.com, marvel.com, imagecomics.com…), Penguin Random House, Amazon or a comic shop listing usually says "Collects … #7–12".`,
+            `Count one-shots, annuals and specials as issues. Don't estimate from a typical volume size.`,
+            `End your reply with exactly one line, either`,
+            `RESULT: {"collects": "<series> #<first>–<last>[, …]", "issues": <count>, "source": "<url>"}`,
+            `or, if you could not find it: RESULT: null`,
+          ].join('\n'),
+        },
+      ],
+    },
+  ];
+  for (let turn = 0; turn < 4; turn++) {
+    const res = await anthropic().beta.messages.create({
+      model: MODELS[0],
+      max_tokens: 4000,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      output_config: { effort: 'medium' },
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }],
+      messages,
+    } as never);
+    // the server-side search loop can pause; re-send the turn to resume it
+    if (res.stop_reason === 'pause_turn') {
+      messages = [...messages, { role: 'assistant', content: res.content }];
+      continue;
+    }
+    const text = (res.content as { type: string; text?: string }[])
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text ?? '')
+      .join('\n');
+    const m = text.match(/RESULT:\s*(\{[\s\S]*?\}|null)\s*$/);
+    if (!m || m[1] === 'null') return none;
+    try {
+      const r = JSON.parse(m[1]) as { collects?: unknown; issues?: unknown; source?: unknown };
+      const n = Number.isInteger(r.issues) && (r.issues as number) >= 1 && (r.issues as number) <= 500 ? (r.issues as number) : null;
+      const named = typeof r.collects === 'string' && /#\s*\d/.test(r.collects) ? r.collects.trim() : null;
+      return n && named ? { collects: named, issues: n, source: typeof r.source === 'string' ? r.source : null } : none;
+    } catch {
+      return none;
+    }
+  }
+  return none;
+}
+
 /** Genre tags for comic series (by title + publisher), one batched call. */
 export async function classifyGenres(series: { key: string; title: string; publisher: string | null }[]): Promise<Record<string, string[]>> {
   if (!series.length) return {};
