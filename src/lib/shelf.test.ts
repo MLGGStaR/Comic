@@ -103,6 +103,16 @@ describe('estimateCopies', () => {
     const both = entry({ variants: [MAIN(), { id: 'v9', name: 'Cover F 1:25 Ian Bertram Variant', cover: null }] });
     expect(await estimateCopies(both, price)).toBe(64.99);
   });
+  test('a graded copy is valued at its grade', async () => {
+    const graded = async () => ({ raw: 10.07, grades: { '6.0': 15.47, '8.0': 24.5, '9.8': 75.68 } });
+    const e = entry({ variants: [{ ...MAIN(), grade: { by: 'CGC', grade: 9.8 } }] });
+    expect(await estimateCopies(e, graded)).toBe(75.68);
+  });
+  test('a grade with no sales data: in proportion between known grades, or the nearest lower one as a floor', async () => {
+    const graded = async () => ({ raw: 10, grades: { '6.0': 15, '8.0': 24 } });
+    expect(await estimateCopies(entry({ variants: [{ ...MAIN(), grade: { by: 'CGC', grade: 7 } }] }), graded)).toBe(19.5);
+    expect(await estimateCopies(entry({ variants: [{ ...MAIN(), grade: { by: 'CBCS', grade: 9.8 } }] }), graded)).toBe(24);
+  });
   test('collector photos (covers the catalogue lacks) are never price-matched', async () => {
     const seen: (string | null)[] = [];
     const spy = async (c: ComicLite, v: string | null) => {
@@ -143,6 +153,18 @@ describe('shelfView', () => {
     const genreOf = (e: Entry) => (e.meta.series === 'Saga' ? ['Sci-Fi', 'Fantasy'] : ['Superhero']);
     expect(ids(shelfView(list, { shelf: 'read', sort: 'read', genre: 'Fantasy', genreOf }))).toEqual(['a']);
     expect(ids(shelfView(list, { shelf: 'read', sort: 'read', genre: 'Superhero', genreOf }))).toEqual(['b', 'c']);
+  });
+
+  test('your comics can be narrowed to the ones you have not read yet (or have)', () => {
+    const shelf = [
+      entry({ meta: { id: 'r' }, owned: true, read: true, readAt: '2026-01-01' }),
+      entry({ meta: { id: 'u1' }, owned: true }),
+      entry({ meta: { id: 'u2' }, owned: true }),
+      entry({ meta: { id: 'w' }, owned: false, wishlist: true }),
+    ];
+    expect(ids(shelfView(shelf, { shelf: 'owned', sort: 'series', read: 'unread' })).sort()).toEqual(['u1', 'u2']);
+    expect(ids(shelfView(shelf, { shelf: 'owned', sort: 'series', read: 'read' }))).toEqual(['r']);
+    expect(ids(shelfView(shelf, { shelf: 'owned', sort: 'series' })).sort()).toEqual(['r', 'u1', 'u2']);
   });
 
   test('text search matches series, publisher filter and rating tier narrow it', () => {

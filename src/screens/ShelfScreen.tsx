@@ -54,6 +54,7 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
   const [format, setFormat] = useState<'' | 'issue' | 'collection'>('');
   const [rating, setRating] = useState<number | 'any'>('any');
   const [genre, setGenre] = useState('');
+  const [readState, setReadState] = useState<'' | 'unread' | 'read'>('');
   const [showFilters, setShowFilters] = useState(false);
 
   const onShelf = useMemo(
@@ -81,9 +82,11 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
         rating: rating === 'any' ? undefined : rating,
         genre: genre || undefined,
         genreOf,
+        read: shelf === 'owned' && readState ? readState : undefined,
       }),
-    [entries, shelf, sort, q, publisher, year, format, rating, genre, genreOf],
+    [entries, shelf, sort, q, publisher, year, format, rating, genre, genreOf, readState],
   );
+  const unreadCount = useMemo(() => (shelf === 'owned' ? onShelf.filter((e) => !e.read).length : 0), [onShelf, shelf]);
   const activeFilters = [publisher, year, format, genre].filter(Boolean).length;
   const today = new Date().toISOString().slice(0, 10);
 
@@ -128,15 +131,37 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
           </select>
         </div>
 
-        <button
-          onClick={() => setShowFilters((v) => !v)}
-          className={`mb-3 px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1 ${
-            activeFilters ? 'bg-lb-green/15 text-lb-green' : 'bg-bg-1 text-ink-2'
-          }`}
-        >
-          Filters{activeFilters ? ` · ${activeFilters}` : ''}
-          <Icon name="chevron-down" size={14} className={showFilters ? 'rotate-180 transition-transform' : 'transition-transform'} />
-        </button>
+        <div className="flex items-center gap-2 mb-3">
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1 ${
+              activeFilters ? 'bg-lb-green/15 text-lb-green' : 'bg-bg-1 text-ink-2'
+            }`}
+          >
+            Filters{activeFilters ? ` · ${activeFilters}` : ''}
+            <Icon name="chevron-down" size={14} className={showFilters ? 'rotate-180 transition-transform' : 'transition-transform'} />
+          </button>
+          {shelf === 'owned' ? (
+            <div className="flex rounded-lg bg-bg-1 p-0.5 text-xs font-semibold" role="group" aria-label="Read or not">
+              {(
+                [
+                  ['', 'All'],
+                  ['unread', `Not read${unreadCount ? ` · ${unreadCount}` : ''}`],
+                  ['read', 'Read'],
+                ] as const
+              ).map(([k, label]) => (
+                <button
+                  key={k || 'all'}
+                  onClick={() => setReadState(k)}
+                  aria-pressed={readState === k}
+                  className={`px-2.5 py-1 rounded-md ${readState === k ? (k === 'unread' ? 'bg-lb-orange text-bg-0' : k === 'read' ? 'bg-lb-blue text-bg-0' : 'bg-bg-2 text-ink-0') : 'text-ink-2'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         {showFilters ? (
           <div className="grid grid-cols-2 gap-2 mb-3 fade-in">
             <select value={genre} onChange={(e) => setGenre(e.target.value)} className={`${select} ${genre ? 'text-lb-green' : ''}`}>
@@ -190,9 +215,15 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
             ))}
           </div>
         ) : !view.length ? (
-          <Empty title={onShelf.length ? 'Nothing matches' : `No ${TITLES[shelf].toLowerCase()} yet`}>
-            {onShelf.length ? 'Try clearing the filters.' : isSelf ? 'Hold any cover to add it here.' : null}
-          </Empty>
+          readState && !q && !activeFilters && onShelf.length ? (
+            <Empty title={readState === 'unread' ? 'All read' : 'None read yet'}>
+              {readState === 'unread' ? `Every comic ${who ? `${who} owns` : 'you own'} has been read.` : 'Rate a comic, or mark it Read, and it shows up here.'}
+            </Empty>
+          ) : (
+            <Empty title={onShelf.length ? 'Nothing matches' : `No ${TITLES[shelf].toLowerCase()} yet`}>
+              {onShelf.length ? 'Try clearing the filters.' : isSelf ? 'Hold any cover to add it here.' : null}
+            </Empty>
+          )
         ) : (
           <>
             <div className="text-[11px] text-ink-2 mb-2 px-0.5">{view.length}</div>

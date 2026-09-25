@@ -107,6 +107,13 @@ export interface OwnedVariant {
   name: string;
   cover: string | null;
   price?: number | null; // that cover's cover price, when known
+  grade?: Grade | null; // slabbed copy: who graded it and the grade; absent = raw
+}
+
+export type GradeCompany = 'CGC' | 'CBCS' | 'PGX' | 'Other';
+export interface Grade {
+  by: GradeCompany;
+  grade: number; // 0.5 – 10
 }
 
 export interface SearchResult {

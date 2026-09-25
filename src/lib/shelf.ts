@@ -1,5 +1,6 @@
 // Ordering and money math for the My Comics shelves and the portfolio.
-import type { ComicLite, Entry } from '../types';
+import type { ComicLite, Entry, Grade } from '../types';
+import { gradedPrice, type GradedPrice } from './pricing';
 
 /** Issue numbers as sortable numbers: "10" → 10, "½" → 0.5, "1.MU" → 1. */
 export function issueNum(n: string | null | undefined): number {
@@ -31,6 +32,7 @@ export interface ShelfOpts {
   rating?: number;
   genre?: string;
   genreOf?: (e: Entry) => string[];
+  read?: 'read' | 'unread'; // e.g. the comics you own but haven't read yet
 }
 
 const releaseDesc = (a: Entry, b: Entry) => {
@@ -51,6 +53,7 @@ export function shelfView(entries: Entry[], o: ShelfOpts): Entry[] {
     if (o.format && e.meta.format !== o.format) return false;
     if (o.rating != null && e.rating !== o.rating) return false;
     if (o.genre && !(o.genreOf?.(e) ?? []).includes(o.genre)) return false;
+    if (o.read && e.read !== (o.read === 'read')) return false;
     return true;
   });
   const byRead = (a: Entry, b: Entry) => (b.readAt ?? '').localeCompare(a.readAt ?? '') || b.updatedAt.localeCompare(a.updatedAt);
@@ -90,11 +93,23 @@ export function valueOf(e: Entry): Worth {
   return known.length ? { amount: cents(known.reduce((s, p) => s + p, 0)), basis: 'cover' } : { amount: null, basis: null };
 }
 
-export type PriceLookup = (c: ComicLite, variantName: string | null) => Promise<{ raw: number | null } | null>;
+/** A listing's prices: raw (ungraded) and, where known, per grade ("6.0", "9.8"…). */
+export interface PricePoint {
+  raw: number | null;
+  grades?: Record<string, number> | null;
+}
+export type PriceLookup = (c: ComicLite, variantName: string | null) => Promise<PricePoint | null>;
 
-/** Market value of the covers you picked: each at its own listing, a cover with
- *  no listing (or a collector photo) at its cover price. null when no cover is
- *  picked or none of them is listed. */
+/** One copy's market value: its grade's price when slabbed, else raw. */
+export function copyValue(p: PricePoint | null, grade: Grade | null | undefined): GradedPrice | { amount: number; basis: 'raw'; from: 'raw' } | null {
+  if (!p) return null;
+  if (grade) return gradedPrice({ ...(p.grades ?? {}), ...(p.raw != null ? { raw: p.raw } : {}) }, grade.grade);
+  return p.raw != null ? { amount: p.raw, basis: 'raw', from: 'raw' } : null;
+}
+
+/** Market value of the covers you picked: each at its own listing (at its grade
+ *  when slabbed), a cover with no listing (or a collector photo) at its cover
+ *  price. null when no cover is picked or none of them is listed. */
 export async function estimateCopies(e: Entry, price: PriceLookup): Promise<number | null> {
   if (!e.variants.length) return null;
   let sum = 0;
@@ -102,8 +117,9 @@ export async function estimateCopies(e: Entry, price: PriceLookup): Promise<numb
   for (const v of e.variants) {
     const custom = v.id.startsWith('custom:');
     const p = custom ? null : await price(e.meta, v.id === e.comicId ? null : v.name).catch(() => null);
-    if (p?.raw != null) {
-      sum += p.raw;
+    const worth = copyValue(p, v.grade);
+    if (worth) {
+      sum += worth.amount;
       listed = true;
     } else {
       sum += v.price ?? e.meta.price ?? 0;

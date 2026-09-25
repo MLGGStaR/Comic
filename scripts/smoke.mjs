@@ -156,6 +156,33 @@ try {
     await settle();
   });
 
+  await check('pick the cover you own, log it as CGC 9.8, see graded prices', async () => {
+    await page.getByRole('button', { name: 'Absolute Batman #2' }).first().click();
+    const top = page.locator('.screen-in').last();
+    await top.getByText('Which cover do you have?').waitFor({ timeout: 20000 });
+    await settle(700); // a page ignores taps while it slides in (ghost-tap guard)
+    await top.getByRole('button', { name: /^Main/ }).first().click();
+    await top.getByRole('button', { name: 'Raw · graded?' }).waitFor({ timeout: 10000 });
+    await top.getByRole('button', { name: 'Raw · graded?' }).click();
+    const sheet = page.getByRole('dialog', { name: 'Grade' });
+    await sheet.getByRole('button', { name: 'CGC', exact: true }).click();
+    await sheet.getByRole('button', { name: '9.8', exact: true }).click();
+    await sheet.getByText('Worth at CGC 9.8').waitFor({ timeout: 30000 });
+    await settle(400);
+    await shot('06b-grade-sheet');
+    await sheet.getByRole('button', { name: 'Save' }).click();
+    await page.waitForTimeout(2500);
+    const rows = await (await fetch(`${BASE}/rest/v1/comic_entries?user_id=eq.${user.id}&select=comic_id,variants`, { headers: H })).json();
+    const v = rows.find((x) => x.comic_id === '8081353')?.variants?.[0];
+    if (!v || v.id !== '8081353' || v.grade?.by !== 'CGC' || v.grade?.grade !== 9.8) throw new Error(`db variants ${JSON.stringify(rows)}`);
+    await top.getByText('Graded (CGC / CBCS)').waitFor({ timeout: 30000 });
+    await top.getByRole('button', { name: 'CGC 9.8' }).scrollIntoViewIfNeeded();
+    await settle(600);
+    await screen('06c-graded-copy');
+    await top.getByRole('button', { name: 'Back' }).click();
+    await settle();
+  });
+
   await check('hold a cover → quick log → wishlist', async () => {
     await page.locator('#search-input').fill('saga #1');
     await page.getByText('Saga #1', { exact: true }).first().waitFor({ timeout: 30000 });
@@ -195,6 +222,14 @@ try {
     await page.getByPlaceholder('Search comics…').waitFor({ timeout: 10000 });
     await settle(600);
     await screen('11-shelf-owned');
+    // the one comic owned so far has been read: "Not read" hides it, "Read" shows it
+    const shelfTop = page.locator('.screen-in').last();
+    await shelfTop.getByRole('button', { name: /^Not read/ }).click();
+    await shelfTop.getByText('All read').waitFor({ timeout: 5000 });
+    await shot('11b-shelf-not-read');
+    await shelfTop.getByRole('button', { name: 'Read', exact: true }).click();
+    await shelfTop.getByRole('button', { name: /Absolute Batman #2/ }).first().waitFor({ timeout: 5000 });
+    await shelfTop.getByRole('button', { name: 'All', exact: true }).click();
     await page.locator('.screen-in').last().getByRole('button', { name: 'Back' }).click();
     await settle(500);
     await page.getByText('Portfolio · est. value').click();

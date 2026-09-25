@@ -53,9 +53,9 @@ export async function refreshValues(entries: Entry[], opts?: { force?: boolean }
   }
 }
 
-// Values used to be estimated as if every owned comic were the 1st-print main
-// cover. Once per device: recompute everything under the cover-aware rules.
-const VALUES_VERSION = '2';
+// Values stored under older rules (every copy the 1st print; a listing from a
+// decades-older volume; no grades): once per device, recompute everything.
+const VALUES_VERSION = '3';
 let migrating: Promise<void> | null = null;
 export function migrateValues(entries: Entry[]): Promise<void> {
   migrating ??= (async () => {

@@ -6,7 +6,8 @@ import { api, comicParams, type ComicExtras } from '../api/client';
 import { priceFor, type PriceEstimate } from '../api/prices';
 import { removeCustomCover } from '../api/covers';
 import { estimateFor } from '../state/values';
-import type { ComicDetail, ComicLite, Variant, Review } from '../types';
+import type { ComicDetail, ComicLite, OwnedVariant, Variant, Review } from '../types';
+import { GradeSheet, gradeLabel } from '../ui/GradeSheet';
 import { AddCoverSheet, CoverPicker, allCovers, coversChanged, toggleOwnedCover } from '../ui/CoverPicker';
 import { Screen } from '../ui/Screen';
 import { Cover } from '../ui/Cover';
@@ -410,26 +411,43 @@ function MarketValue({ comic }: { comic: ComicLite }) {
   if (comic.format !== 'issue') return null;
   if (p === undefined) return <div className="h-14 rounded-2xl skeleton" />;
   if (!p?.raw) return null;
+  const grades = SHOWN_GRADES.filter((k) => p.grades[k] != null);
   return (
-    <a href={p.url} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-2xl bg-bg-1 border border-white/[0.05] px-4 py-3">
-      <div>
-        <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold">Market value</div>
-        <div className="text-[11px] text-ink-2 mt-0.5">raw copy · via PriceCharting ↗</div>
-      </div>
-      <div className="text-right">
+    <div className="rounded-2xl bg-bg-1 border border-white/[0.05] px-4 py-3">
+      <a href={p.url} target="_blank" rel="noreferrer" className="flex items-center justify-between">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold">Market value</div>
+          <div className="text-[11px] text-ink-2 mt-0.5">raw copy · via PriceCharting ↗</div>
+        </div>
         <div className="font-display text-xl font-extrabold text-lb-green leading-none">{fmtMoney(p.raw)}</div>
-        {p.vf ? <div className="text-[11px] text-ink-2 mt-1">8.0 graded {fmtMoney(p.vf)}</div> : null}
-      </div>
-    </a>
+      </a>
+      {grades.length ? (
+        <>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold mt-3 mb-1.5">Graded (CGC / CBCS)</div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {grades.map((k) => (
+              <div key={k} className="rounded-lg bg-bg-2 px-2 py-1.5 text-center">
+                <div className="text-[10px] text-ink-2 font-semibold">{k}</div>
+                <div className="text-[13px] font-bold tabular-nums">{fmtMoney(p.grades[k])}</div>
+              </div>
+            ))}
+          </div>
+          {!p.full ? <div className="text-[10px] text-ink-2 mt-2">9.0–10 prices need a PriceCharting API token (Settings).</div> : null}
+        </>
+      ) : null}
+    </div>
   );
 }
+
+const SHOWN_GRADES = ['10.0', '9.8', '9.6', '9.4', '9.2', '9.0', '8.0', '7.0', '6.0', '5.0', '4.0', '3.0', '2.0'];
 
 function YourCopy({ comic, detail }: { comic: ComicLite; detail: ComicDetail | null }) {
   const entry = useEntry(comic.id);
   const [edit, setEdit] = useState(false);
   const [paid, setPaid] = useState('');
   const [value, setValue] = useState('');
-  const variantKey = entry?.variants.map((v) => v.id).join(',') ?? '';
+  const [grading, setGrading] = useState<OwnedVariant | null>(null);
+  const variantKey = entry?.variants.map((v) => `${v.id}:${v.grade ? `${v.grade.by}${v.grade.grade}` : 'raw'}`).join(',') ?? '';
   useEffect(() => {
     if (!entry?.owned) return;
     let alive = true;
@@ -447,7 +465,6 @@ function YourCopy({ comic, detail }: { comic: ComicLite; detail: ComicDetail | n
   if (!entry?.owned) return null;
   const v = valueOf(entry);
   const copies = Math.max(1, entry.variants.length);
-  const names = entry.variants.map((x) => x.name);
   const save = () => {
     const num = (s: string) => (s.trim() === '' ? null : Math.max(0, Number(s.replace(/[^0-9.]/g, ''))));
     void collection.patch(comic, { paid: num(paid), value: num(value) });
@@ -464,7 +481,6 @@ function YourCopy({ comic, detail }: { comic: ComicLite; detail: ComicDetail | n
             {v.basis === 'yours' ? 'your value' : v.basis === 'market' ? 'market estimate' : v.basis === 'cover' ? 'at cover price' : 'no value yet'}
             {entry.paid != null ? ` · paid ${fmtMoney(entry.paid)}` : ''}
           </div>
-          {names.length ? <div className="text-[11px] text-ink-1 mt-1 line-clamp-2">{names.join(' · ')}</div> : null}
         </div>
         <button
           onClick={() => {
@@ -492,7 +508,26 @@ function YourCopy({ comic, detail }: { comic: ComicLite; detail: ComicDetail | n
           </button>
         </div>
       ) : null}
+      {entry.variants.length ? (
+        <div className="mt-3 space-y-1.5">
+          {entry.variants.map((c) => (
+            <div key={c.id} className="flex items-center gap-2.5">
+              <div className="w-7 aspect-[2/3] rounded overflow-hidden bg-bg-2 flex-shrink-0">
+                <Cover src={c.cover} alt={c.name} className="w-full h-full" />
+              </div>
+              <div className="flex-1 min-w-0 text-[12px] text-ink-1 truncate">{c.name}</div>
+              <button
+                onClick={() => setGrading(c)}
+                className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-bold ${c.grade ? 'bg-lb-blue text-bg-0' : 'bg-bg-2 text-ink-2'}`}
+              >
+                {c.grade ? gradeLabel(c.grade) : 'Raw · graded?'}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {v.unpicked ? <CoverPicker comic={comic} detail={detail} className="mt-3 !bg-bg-0/50" /> : null}
+      {grading ? <GradeSheet comic={comic} cover={grading} onClose={() => setGrading(null)} /> : null}
     </div>
   );
 }

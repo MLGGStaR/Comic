@@ -11,6 +11,7 @@ import { Cover } from '../ui/Cover';
 import { SectionHeader } from '../ui/layout';
 import { ValueSparkline, useValueHistory } from '../ui/ValueSparkline';
 import { refreshValues, useValueRefresh } from '../state/values';
+import { gradeLabel } from '../ui/GradeSheet';
 
 const BASIS_UI = {
   market: { label: 'Market', color: '#00d735' },
@@ -160,7 +161,16 @@ export function PortfolioScreen({ userId, onClose }: { userId: string; onClose: 
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-semibold truncate">{e.meta.title}</div>
                       <div className="text-[11px] text-ink-2 truncate">
-                        {v.unpicked ? <span className="text-lb-orange">Cover not picked</span> : e.variants.length > 1 ? `${e.variants.length} covers` : e.variants[0]?.name}
+                        {v.unpicked ? (
+                          <span className="text-lb-orange">Cover not picked</span>
+                        ) : e.variants.length > 1 ? (
+                          `${e.variants.length} covers`
+                        ) : (
+                          <>
+                            {e.variants[0]?.name}
+                            {e.variants[0]?.grade ? <span className="text-lb-blue font-semibold"> · {gradeLabel(e.variants[0].grade)}</span> : null}
+                          </>
+                        )}
                         {v.basis ? ` · ${BASIS_UI[v.basis].label}` : ''}
                       </div>
                     </div>
