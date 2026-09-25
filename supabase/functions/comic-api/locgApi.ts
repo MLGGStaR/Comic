@@ -19,7 +19,7 @@ import {
   type IssueItem,
   type SeriesCard,
 } from '../_shared/locg.ts';
-import { normalize, parseQuery, type ParsedQuery } from '../_shared/query.ts';
+import { normalize, parseQuery, type Edition, type ParsedQuery } from '../_shared/query.ts';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
@@ -142,12 +142,18 @@ export async function search(q: string) {
     }
     return { top: seriesItself, more: others };
   }
-  const cols = await findCollections(best, p);
-  if (cols.length) {
-    return {
-      top: { kind: 'comic' as const, comic: cols[0] },
-      more: [...cols.slice(1, 4).map((c) => ({ kind: 'comic' as const, comic: c })), seriesItself, ...others].slice(0, 6),
-    };
+  // collected editions may be listed under another run of the same name
+  // ("secret wars tp": the newest Secret Wars has none yet, 2015's does)
+  for (const s of ranked.slice(0, 3)) {
+    const cols = await findCollections(s, p);
+    if (cols.length) {
+      const run = { kind: 'series' as const, series: seriesHit(s) };
+      const rest = ranked.filter((c) => c.id !== s.id).slice(0, 4).map((c) => ({ kind: 'series' as const, series: seriesHit(c) }));
+      return {
+        top: { kind: 'comic' as const, comic: cols[0] },
+        more: [...cols.slice(1, 4).map((c) => ({ kind: 'comic' as const, comic: c })), run, ...rest].slice(0, 6),
+      };
+    }
   }
   return { top: seriesItself, more: others };
 }
@@ -174,12 +180,20 @@ async function findCollections(best: SeriesCard, p: ParsedQuery): Promise<Lite[]
       .filter(isMain)
       .filter((i) => p.volume == null || splitTitle(i.title).volume === p.volume)
       .map((i) => toComicLite(i, ctx))
-      // plain TP first, then HC, then deluxe/omnibus editions
-      .sort((a, b) => rankFormat(a.title) - rankFormat(b.title) || (a.releaseDate ?? '').localeCompare(b.releaseDate ?? ''));
+      // the edition asked for ("… hc") first; else plain TP, then HC, then deluxe/omnibus
+      .sort(
+        (a, b) =>
+          Number(!!p.edition && editionOf(a.title) !== p.edition) - Number(!!p.edition && editionOf(b.title) !== p.edition) ||
+          rankFormat(a.title) - rankFormat(b.title) ||
+          (a.releaseDate ?? '').localeCompare(b.releaseDate ?? ''),
+      );
   let found = pick((await inSeries(best.id, `${best.title} vol ${p.volume ?? ''}`.trim(), [3, 4])).items);
   if (!found.length) found = pick((await seriesItems(best.id, [3, 4])).items);
   return found;
 }
+
+const editionOf = (title: string): Edition =>
+  /deluxe/i.test(title) ? 'deluxe' : /omnibus|compendium/i.test(title) ? 'omnibus' : /\bHC$/i.test(title) ? 'hc' : 'tp';
 
 function rankFormat(title: string): number {
   if (/deluxe|omnibus|compendium|absolute edition|box set/i.test(title)) return 3;

@@ -8,6 +8,7 @@ import { removeCustomCover } from '../api/covers';
 import { estimateFor } from '../state/values';
 import type { ComicDetail, ComicLite, OwnedVariant, Variant, Review } from '../types';
 import { GradeSheet, gradeLabel } from '../ui/GradeSheet';
+import { useCollectsOf } from '../state/collects';
 import { AddCoverSheet, CoverPicker, allCovers, coversChanged, toggleOwnedCover } from '../ui/CoverPicker';
 import { Screen } from '../ui/Screen';
 import { Cover } from '../ui/Cover';
@@ -332,6 +333,7 @@ function Overview({ comic, detail, err }: { comic: ComicLite; detail: ComicDetai
       ) : null}
 
       <YourCopy comic={comic} detail={detail} />
+      <CollectsRow comic={comic} />
       <MarketValue comic={comic} />
 
       {creators.length ? (
@@ -392,6 +394,77 @@ function Overview({ comic, detail, err }: { comic: ComicLite; detail: ComicDetai
         <a href={detail.url} target="_blank" rel="noreferrer" className="block text-center text-[11px] text-ink-2 py-2">
           Data from {sourceName(detail.url)} ↗
         </a>
+      ) : null}
+    </div>
+  );
+}
+
+/** Trades hold several issues: which ones, and how many (yours wins). */
+function CollectsRow({ comic }: { comic: ComicLite }) {
+  const entry = useEntry(comic.id);
+  const looked = useCollectsOf(comic);
+  const [editing, setEditing] = useState(false);
+  const [n, setN] = useState(6);
+  if (comic.format !== 'collection') return null;
+  const mine = entry?.issues ?? null;
+  const count = mine ?? looked?.issues ?? null;
+  const clamp = (x: number) => Math.min(999, Math.max(1, Math.round(x) || 1));
+  const save = (v: number | null) => {
+    if (!entry) return;
+    void collection.patch(entry.meta, { issues: v });
+    setEditing(false);
+    toast(v == null ? 'Using the looked-up count' : `Counts as ${v} issue${v === 1 ? '' : 's'}`);
+  };
+  return (
+    <div className="rounded-2xl bg-bg-1 border border-white/[0.05] px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold">Collects</div>
+          <div className="text-[15px] font-semibold text-ink-0 mt-0.5">
+            {count != null ? `${count} issue${count === 1 ? '' : 's'}` : looked === undefined && !entry ? '…' : 'Not known yet'}
+          </div>
+          <div className="text-[11px] text-ink-2 mt-0.5 line-clamp-2">
+            {mine != null ? 'your count' : looked?.collects ?? (entry ? 'Set how many issues it holds — your read count uses it' : '')}
+          </div>
+        </div>
+        {entry ? (
+          <button
+            onClick={() => {
+              setN(count ?? 6);
+              setEditing((e) => !e);
+            }}
+            className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-bg-2 text-xs font-semibold text-ink-1"
+          >
+            {editing ? 'Cancel' : count != null ? 'Edit' : 'Set'}
+          </button>
+        ) : null}
+      </div>
+      {editing ? (
+        <div className="mt-3 fade-in">
+          <div className="flex items-center gap-2">
+            <button onClick={() => setN((x) => clamp(x - 1))} aria-label="One fewer" className="w-11 h-11 rounded-xl bg-bg-2 text-xl font-bold">
+              −
+            </button>
+            <input
+              inputMode="numeric"
+              value={n}
+              onChange={(e) => setN(clamp(Number(e.target.value.replace(/\D/g, ''))))}
+              aria-label="Issues"
+              className="w-16 h-11 text-center bg-bg-2 rounded-xl text-[18px] font-bold focus:outline-none"
+            />
+            <button onClick={() => setN((x) => clamp(x + 1))} aria-label="One more" className="w-11 h-11 rounded-xl bg-bg-2 text-xl font-bold">
+              +
+            </button>
+            <button onClick={() => save(n)} className="flex-1 btn-primary !py-2.5">
+              Save
+            </button>
+          </div>
+          {mine != null && looked?.issues ? (
+            <button onClick={() => save(null)} className="text-[11px] text-ink-2 mt-2">
+              Use the looked-up count ({looked.issues})
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

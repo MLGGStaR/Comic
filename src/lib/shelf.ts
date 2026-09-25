@@ -128,6 +128,29 @@ export async function estimateCopies(e: Entry, price: PriceLookup): Promise<numb
   return listed ? cents(sum) : null;
 }
 
+/** What a collected edition holds, as looked up (null = unknown). */
+export interface Collects {
+  collects: string | null; // "House of M #1–8"
+  issues: number | null;
+}
+
+/** How many single issues these comics add up to: an issue is one; a trade is
+ *  your own count, else the looked-up one, else at least one (and listed). */
+export function issueCount(entries: Entry[], known: Map<string, Collects>): { total: number; unknown: Entry[] } {
+  let total = 0;
+  const unknown: Entry[] = [];
+  for (const e of entries) {
+    if (e.meta.format !== 'collection') {
+      total += 1;
+      continue;
+    }
+    const n = e.issues ?? known.get(e.comicId)?.issues ?? null;
+    if (n == null) unknown.push(e);
+    total += n ?? 1;
+  }
+  return { total, unknown };
+}
+
 export function portfolio(entries: Entry[]) {
   let total = 0;
   let owned = 0;

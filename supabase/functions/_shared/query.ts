@@ -2,14 +2,25 @@
 // structured query: which series, and whether they mean one issue, one
 // collected edition, or the whole series.
 
+export type Edition = 'tp' | 'hc' | 'omnibus' | 'deluxe';
+
 export interface ParsedQuery {
   series: string;
   issue?: string;
   volume?: number;
   year?: number;
   annual?: boolean; // "batman annual #2" → the annual inside the Batman run
+  edition?: Edition; // "house of m tp" → a collected edition, this format preferred
   kind: 'issue' | 'collection' | 'series';
 }
+
+// trailing format words: "… tp", "… hardcover", "… omnibus", "… deluxe edition"
+const EDITIONS: [RegExp, Edition][] = [
+  [/\s+(?:tpb?|trade(?: paperback)?)$/, 'tp'],
+  [/\s+(?:oversized hc|hc|hardcover)$/, 'hc'],
+  [/\s+(?:omnibus|compendium)$/, 'omnibus'],
+  [/\s+deluxe(?: edition)?$/, 'deluxe'],
+];
 
 const YEAR_MIN = 1930;
 const YEAR_MAX = new Date().getFullYear() + 3;
@@ -46,7 +57,30 @@ function parseCore(raw: string): ParsedQuery {
     .replace(/\s+/g, ' ')
     .trim();
 
-  const withYear = (q: ParsedQuery): ParsedQuery => (year != null ? { ...q, year } : q);
+  // a trailing format word asks for a collected edition ("house of m tp")
+  let edition: Edition | undefined;
+  for (const [re, ed] of EDITIONS) {
+    const rest = s.replace(re, '').trim();
+    if (rest !== s && rest) {
+      edition = ed;
+      s = rest;
+      break;
+    }
+  }
+
+  const withYear = (q: ParsedQuery): ParsedQuery => {
+    let r = q;
+    if (edition) {
+      if (q.kind === 'series') r = { ...q, kind: 'collection', edition };
+      else if (q.kind === 'collection') r = { ...q, edition };
+      else if (/^\d+$/.test(q.issue ?? '')) {
+        // "saga 1 tp": the number is the volume
+        const { issue, ...rest } = q;
+        r = { ...rest, volume: Number(issue), kind: 'collection', edition };
+      }
+    }
+    return year != null ? { ...r, year } : r;
+  };
 
   // collected edition: "vol 1", "vol. 1", "volume 1", "tpb 1", "book 1"
   let m = s.match(/^(.+?)\s+(?:vol(?:ume)?\.?|tpb|tp|book)\s*(\d+)$/);
@@ -65,7 +99,7 @@ function parseCore(raw: string): ParsedQuery {
   if (m) {
     const n = Number(m[2]);
     if (/^\d{4}$/.test(m[2]) && isYear(n) && year == null) {
-      return { series: m[1].trim(), year: n, kind: 'series' };
+      return withYear({ series: m[1].trim(), year: n, kind: 'series' });
     }
     return withYear({ series: m[1].trim(), issue: m[2], kind: 'issue' });
   }

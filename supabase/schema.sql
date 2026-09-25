@@ -23,6 +23,8 @@ create table if not exists public.comic_entries (
 );
 create index if not exists comic_entries_updated on public.comic_entries (updated_at desc);
 create index if not exists comic_entries_comic on public.comic_entries (comic_id);
+-- your count of the issues a collected edition holds (overrides the looked-up one)
+alter table public.comic_entries add column if not exists issues smallint check (issues is null or (issues between 1 and 999));
 
 -- ── series a user follows (their pull list) ────────────────────────────────
 create table if not exists public.comic_follows (

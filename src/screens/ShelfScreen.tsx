@@ -7,7 +7,9 @@ import { Screen } from '../ui/Screen';
 import { useUserEntries } from '../state/userEntries';
 import { profileById, useProfiles } from '../state/profiles';
 import { useActions } from '../state/actions';
-import { shelfView, valueOf, type ShelfSort } from '../lib/shelf';
+import { issueCount, shelfView, valueOf, type ShelfSort } from '../lib/shelf';
+import { useCollects } from '../state/collects';
+import { Cover } from '../ui/Cover';
 import { ComicTile } from '../ui/ComicTile';
 import { RatingHistogram } from '../ui/RatingHistogram';
 import { Empty } from '../ui/layout';
@@ -39,6 +41,7 @@ const SORTS: Record<Shelf, [ShelfSort, string][]> = {
 };
 
 const select = 'min-w-0 bg-bg-1 rounded-xl px-3 py-2 text-[13px] font-semibold';
+const NONE: Entry[] = [];
 
 export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: string; onClose: () => void }) {
   useProfiles();
@@ -62,6 +65,10 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
     [entries, shelf],
   );
   const genreMap = useGenres(onShelf);
+  // trades hold several issues: count those too ("36 comics · 71 issues")
+  const collects = useCollects(shelf === 'wishlist' ? NONE : onShelf);
+  const issues = useMemo(() => issueCount(onShelf, collects), [onShelf, collects]);
+  const hasTrades = shelf !== 'wishlist' && onShelf.some((e) => e.meta.format === 'collection');
   const genreOf = useMemo(() => genresOf(genreMap), [genreMap]);
   const genres = useMemo(() => uniq(onShelf.flatMap(genreOf)).sort(), [onShelf, genreOf]);
   const publishers = useMemo(() => uniq(onShelf.map((e) => e.meta.publisher).filter(Boolean) as string[]).sort(), [onShelf]);
@@ -98,6 +105,13 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
             <div className="font-display text-[28px] font-extrabold leading-none">{TITLES[shelf]}</div>
             <div className="text-xs text-ink-2 mt-1.5">
               {onShelf.length} {onShelf.length === 1 ? 'comic' : 'comics'}
+              {hasTrades ? (
+                <span className="text-ink-1 font-semibold">
+                  {' '}
+                  · {issues.total}
+                  {issues.unknown.length ? '+' : ''} issues
+                </span>
+              ) : null}
               {who ? ` · ${who}` : ''}
             </div>
           </div>
@@ -110,6 +124,21 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
             </div>
           ) : null}
         </div>
+
+        {isSelf && hasTrades && issues.unknown.length ? (
+          <div className="rounded-xl bg-bg-1 px-3 py-2.5 mb-3 flex items-center gap-3">
+            <div className="flex gap-1.5 flex-shrink-0">
+              {issues.unknown.slice(0, 4).map((e) => (
+                <button key={e.comicId} onClick={() => a.openComic(e.meta)} aria-label={`Set issues for ${e.meta.title}`} className="w-7 aspect-[2/3] rounded overflow-hidden bg-bg-2">
+                  <Cover src={e.meta.cover} alt={e.meta.title} className="w-full h-full" />
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 min-w-0 text-[11px] text-ink-2 leading-snug">
+              {issues.unknown.length === 1 ? '1 trade has' : `${issues.unknown.length} trades have`} no issue count yet, so {issues.unknown.length === 1 ? 'it counts' : 'each counts'} as 1 — tap to set it.
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex gap-2 mb-2">
           <div className="flex-1 min-w-0 relative">

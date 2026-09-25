@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { issueNum, compareComics, valueOf, portfolio, shelfView, estimateCopies } from './shelf';
+import { issueNum, compareComics, valueOf, portfolio, shelfView, estimateCopies, issueCount } from './shelf';
 import type { ComicLite, Entry, OwnedVariant } from '../types';
 
 const comic = (over: Partial<ComicLite>): ComicLite => ({
@@ -28,6 +28,7 @@ const entry = (over: Omit<Partial<Entry>, 'meta'> & { meta?: Partial<ComicLite> 
   paid: null,
   value: null,
   est: null,
+  issues: null,
   addedAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-01T00:00:00Z',
   ...over,
@@ -172,6 +173,27 @@ describe('shelfView', () => {
     expect(ids(shelfView(list, { shelf: 'read', sort: 'read', publisher: 'Image' }))).toEqual(['a']);
     expect(ids(shelfView(list, { shelf: 'read', sort: 'read', rating: 5 }))).toEqual(['b']);
     expect(ids(shelfView(list, { shelf: 'owned', sort: 'series', year: 2024 }))).toEqual(['c']);
+  });
+});
+
+describe('issueCount', () => {
+  const tp = (id: string, over: Partial<Entry> = {}) => entry({ meta: { id, format: 'collection', number: null }, read: true, ...over });
+  const known = new Map([
+    ['tp1', { collects: 'House of M #1–8', issues: 8 }],
+    ['tp3', { collects: null, issues: null }],
+  ]);
+  test('an issue counts once, a trade counts the issues it collects', () => {
+    const r = issueCount([entry({ meta: { id: 'a' } }), entry({ meta: { id: 'b' } }), tp('tp1')], known);
+    expect(r.total).toBe(10);
+    expect(r.unknown).toEqual([]);
+  });
+  test('your own count for a trade wins', () => {
+    expect(issueCount([tp('tp1', { issues: 7 })], known).total).toBe(7);
+  });
+  test('a trade nobody knows counts as at least one, and is listed', () => {
+    const r = issueCount([tp('tp2'), tp('tp3'), entry({ meta: { id: 'a' } })], known);
+    expect(r.total).toBe(3);
+    expect(r.unknown.map((e) => e.comicId)).toEqual(['tp2', 'tp3']);
   });
 });
 

@@ -13,6 +13,7 @@ export interface EntryPatch {
   paid?: number | null;
   value?: number | null;
   est?: number | null;
+  issues?: number | null; // collected editions: how many issues it holds (yours)
 }
 
 /** local calendar date, YYYY-MM-DD */
@@ -37,6 +38,7 @@ export function applyPatch(prev: Entry | null, patch: EntryPatch, meta: ComicLit
         paid: null,
         value: null,
         est: null,
+        issues: null,
         meta,
         addedAt: stamp,
         updatedAt: stamp,
@@ -60,6 +62,7 @@ export function applyPatch(prev: Entry | null, patch: EntryPatch, meta: ComicLit
   if (patch.paid !== undefined) e.paid = patch.paid;
   if (patch.value !== undefined) e.value = patch.value;
   if (patch.est !== undefined) e.est = patch.est;
+  if (patch.issues !== undefined) e.issues = patch.issues;
 
   if (patch.read === false) {
     e.read = false;

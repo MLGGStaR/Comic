@@ -18,6 +18,7 @@ import { isoDay } from '../lib/entry';
 import { weekStart } from '../lib/dates';
 
 const RECENT_KEY = 'lbx-recent-searches';
+const EDITION_LABEL = { tp: 'Trade paperback', hc: 'Hardcover', omnibus: 'Omnibus', deluxe: 'Deluxe edition' } as const;
 const loadRecent = (): string[] => {
   try {
     return JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]');
@@ -113,7 +114,7 @@ export function SearchView() {
           {parsed.kind === 'issue'
             ? `Issue #${parsed.issue} of “${parsed.series}”`
             : parsed.kind === 'collection'
-            ? `Collected edition · Vol. ${parsed.volume}`
+            ? ['Collected edition', parsed.volume != null ? `Vol. ${parsed.volume}` : null, parsed.edition ? EDITION_LABEL[parsed.edition] : null].filter(Boolean).join(' · ')
             : 'Series'}
           {parsed.year ? ` · ${parsed.year}` : ''}
         </div>

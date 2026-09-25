@@ -67,4 +67,18 @@ describe('parseQuery', () => {
   test('a lone number never becomes an empty-titled issue', () => {
     expect(parseQuery('2099')).toEqual({ series: '2099', kind: 'series' });
   });
+
+  test('a format word means a collected edition of that series ("house of m tp")', () => {
+    expect(parseQuery('house of m tp')).toEqual({ series: 'house of m', kind: 'collection', edition: 'tp' });
+    expect(parseQuery('Batman Hush TPB')).toEqual({ series: 'batman hush', kind: 'collection', edition: 'tp' });
+    expect(parseQuery('infinity gauntlet hardcover')).toEqual({ series: 'infinity gauntlet', kind: 'collection', edition: 'hc' });
+    expect(parseQuery('saga compendium')).toEqual({ series: 'saga', kind: 'collection', edition: 'omnibus' });
+    expect(parseQuery('absolute batman deluxe edition')).toEqual({ series: 'absolute batman', kind: 'collection', edition: 'deluxe' });
+  });
+
+  test('…and it combines with a volume number', () => {
+    expect(parseQuery('absolute batman vol 1 tp')).toEqual({ series: 'absolute batman', volume: 1, kind: 'collection', edition: 'tp' });
+    expect(parseQuery('saga 1 tp')).toEqual({ series: 'saga', volume: 1, kind: 'collection', edition: 'tp' });
+    expect(parseQuery('saga tpb 3')).toEqual({ series: 'saga', volume: 3, kind: 'collection' });
+  });
 });

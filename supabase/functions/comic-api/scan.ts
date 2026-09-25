@@ -283,6 +283,55 @@ const GENRE_SCHEMA = {
   },
 } as const;
 
+const COLLECTS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['items'],
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'collects', 'issues'],
+        properties: {
+          key: { type: 'string' },
+          collects: {
+            ...nullable('string'),
+            description: 'The single issues this edition reprints, as a catalogue lists them, e.g. "House of M #1–8" or "Absolute Batman #1–6". Null if you do not know this specific edition.',
+          },
+          issues: { ...nullable('integer'), description: 'How many single issues that is. Null when collects is null.' },
+        },
+      },
+    },
+  },
+} as const;
+
+export interface Collects {
+  collects: string | null; // "House of M #1–8"
+  issues: number | null; // 8
+}
+
+/** What collected editions (TPs, HCs, omnibuses) reprint — only when the
+ *  model actually knows that edition; never a guess from typical sizes. */
+export async function classifyCollects(items: { key: string; title: string; publisher: string | null; date: string | null }[]): Promise<Record<string, Collects>> {
+  if (!items.length) return {};
+  const list = items.map((i) => `${i.key} | ${i.title}${i.publisher ? ` (${i.publisher}` : ' ('}${i.date ? `, ${i.date.slice(0, 4)}` : ''})`).join('\n');
+  const r = await structured<{ items: { key: string; collects: string | null; issues: number | null }[] }>(
+    'claude-opus-5',
+    'You know the contents of comic book collected editions (trade paperbacks, hardcovers, omnibuses, compendiums). For each edition, name the single issues it reprints and count them. Answer only from knowledge of that specific edition; if you are not sure what it collects, return null for both — never estimate from a typical volume size. Count one-shots, annuals and specials as issues; bonus material is not an issue.',
+    [{ type: 'text', text: `Collected editions (format: key | title (publisher, year)):\n${list}` }],
+    COLLECTS_SCHEMA,
+  );
+  const out: Record<string, Collects> = {};
+  for (const it of r.items) {
+    const n = Number.isInteger(it.issues) && it.issues! >= 1 && it.issues! <= 500 ? it.issues : null;
+    const named = it.collects && /#\s*\d/.test(it.collects) ? it.collects.trim() : null;
+    out[it.key] = n && named ? { collects: named, issues: n } : { collects: null, issues: null };
+  }
+  return out;
+}
+
 /** Genre tags for comic series (by title + publisher), one batched call. */
 export async function classifyGenres(series: { key: string; title: string; publisher: string | null }[]): Promise<Record<string, string[]>> {
   if (!series.length) return {};

@@ -12,11 +12,16 @@ export function usePress(onTap: () => void, onHold?: () => void) {
 
   return {
     onPointerDown: (e: React.PointerEvent) => {
+      // a new press starts clean: when a hold opened a sheet, the finger lifts
+      // on the sheet, the click it would swallow never comes — and the next tap
+      // on this (reused) element must not be eaten instead
+      suppress.current = false;
       if (!holdRef.current || (e.pointerType === 'mouse' && e.button !== 0)) return;
       const sx = e.clientX;
       const sy = e.clientY;
       const timer = window.setTimeout(() => {
         suppress.current = true;
+        window.setTimeout(() => (suppress.current = false), 1000);
         navigator.vibrate?.(12);
         holdRef.current?.();
         cleanup();

@@ -97,6 +97,7 @@ export interface Entry {
   paid: number | null; // what you paid, total
   value: number | null; // your own value override
   est: number | null; // latest market estimate for the copies you own
+  issues: number | null; // collected editions: your count of the issues it holds
   meta: ComicLite;
   addedAt: string;
   updatedAt: string;

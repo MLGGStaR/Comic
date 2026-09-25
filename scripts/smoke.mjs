@@ -202,6 +202,31 @@ try {
     if (!rows.some((x) => x.wishlist)) throw new Error(`no wishlist row ${JSON.stringify(rows)}`);
   });
 
+  await check('a trade counts the issues it collects (House of M TP), and you can correct it', async () => {
+    await page.locator('#search-input').fill('house of m tp');
+    await page.getByRole('button', { name: /House of M TP/ }).first().waitFor({ timeout: 30000 });
+    await page.getByRole('button', { name: /House of M TP/ }).first().click();
+    const top = page.locator('.screen-in').last();
+    await top.getByText('Overview', { exact: true }).waitFor({ timeout: 15000 });
+    await settle(700);
+    await top.getByRole('button', { name: 'Read', exact: true }).click();
+    const card = top.locator('div.rounded-2xl', { hasText: 'Collects' }).first();
+    await card.getByText('8 issues').waitFor({ timeout: 30000 });
+    await card.getByText(/House of M #1.8/).waitFor({ timeout: 5000 });
+    await card.getByRole('button', { name: 'Edit', exact: true }).click();
+    await card.getByRole('button', { name: 'One fewer' }).click();
+    await card.getByRole('button', { name: 'Save', exact: true }).click();
+    await card.getByText('7 issues').waitFor({ timeout: 5000 });
+    await page.waitForTimeout(2000);
+    const rows = await (await fetch(`${BASE}/rest/v1/comic_entries?user_id=eq.${user.id}&comic_id=eq.6759046&select=read,issues`, { headers: H })).json();
+    if (!rows[0]?.read || rows[0]?.issues !== 7) throw new Error(`db row ${JSON.stringify(rows)}`);
+    await card.scrollIntoViewIfNeeded();
+    await settle(300);
+    await screen('07b-trade-collects');
+    await top.getByRole('button', { name: 'Back' }).click();
+    await settle();
+  });
+
   await check('calendar: month grid + day list', async () => {
     await tab('Calendar');
     await page.locator('button[aria-label$="releases"]').first().waitFor({ timeout: 20000 });
@@ -230,6 +255,14 @@ try {
     await shelfTop.getByRole('button', { name: 'Read', exact: true }).click();
     await shelfTop.getByRole('button', { name: /Absolute Batman #2/ }).first().waitFor({ timeout: 5000 });
     await shelfTop.getByRole('button', { name: 'All', exact: true }).click();
+    await page.locator('.screen-in').last().getByRole('button', { name: 'Back' }).click();
+    await settle(500);
+    // Read: Absolute Batman #2 + House of M TP (your count: 7) = 2 comics, 8 issues
+    await page.getByRole('button', { name: /^Read, / }).click();
+    await page.locator('.screen-in').last().getByText('2 comics').waitFor({ timeout: 10000 });
+    await page.locator('.screen-in').last().getByText('8 issues').waitFor({ timeout: 10000 });
+    await settle(500);
+    await screen('11c-shelf-read-issues');
     await page.locator('.screen-in').last().getByRole('button', { name: 'Back' }).click();
     await settle(500);
     await page.getByText('Portfolio · est. value').click();

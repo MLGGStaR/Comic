@@ -20,6 +20,7 @@ interface Row {
   paid: number | string | null;
   value: number | string | null;
   est: number | string | null;
+  issues: number | null;
   meta: ComicLite;
   added_at: string;
   updated_at: string;
@@ -40,6 +41,7 @@ export function rowToEntry(r: Row): Entry {
     paid: num(r.paid),
     value: num(r.value),
     est: num(r.est),
+    issues: r.issues ?? null,
     meta: r.meta,
     addedAt: r.added_at,
     updatedAt: r.updated_at,
@@ -60,6 +62,7 @@ function entryToRow(userId: string, e: Entry): Row {
     paid: e.paid,
     value: e.value,
     est: e.est,
+    issues: e.issues ?? null,
     meta: e.meta,
     added_at: e.addedAt,
     updated_at: e.updatedAt,

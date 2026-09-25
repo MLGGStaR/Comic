@@ -10,7 +10,7 @@
 // Everything is normalised into the app's ComicLite / ComicDetail shapes and
 // cached in comic_cache so the sources see as few requests as possible.
 import { cached, cacheGet, cachePut, cacheGetMany, cachePutMany, customCoversFor, upcGet, upcPut } from '../_shared/cache.ts';
-import { readCover, coarseRank, fineMatch, byHints, classifyGenres, DEFAULT_KNOBS, MODELS, type Candidate, type CoverRead, type Model, type ScanKnobs } from './scan.ts';
+import { readCover, coarseRank, fineMatch, byHints, classifyGenres, classifyCollects, DEFAULT_KNOBS, MODELS, type Candidate, type Collects, type CoverRead, type Model, type ScanKnobs } from './scan.ts';
 import { decodeBarcode } from '../_shared/barcode.ts';
 import { normalize, parseQuery, type ParsedQuery } from '../_shared/query.ts';
 import { splitTitle, rankSeries } from '../_shared/locg.ts';
@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
       case 'search': {
         const q = normalize(p('q'));
         if (q.length < 2) return json({ top: null, more: [] });
-        return json(await cached(`search2:${q}`, 6 * HOUR, () => locg.search(q), { force }));
+        return json(await cached(`search3:${q}`, 6 * HOUR, () => locg.search(q), { force }));
       }
       case 'series': {
         const id = p('id');
@@ -77,6 +77,14 @@ Deno.serve(async (req) => {
         const body = (await req.json().catch(() => ({}))) as { series?: { key: string; title: string; publisher: string | null }[] };
         const series = (body.series ?? []).filter((s) => s?.key && s?.title).slice(0, 200);
         return json(await seriesGenres(uid, series));
+      }
+      case 'collects': {
+        if (req.method !== 'POST') return json({ error: 'POST items' }, 405);
+        const uid = userId(req);
+        if (!uid) return json({ error: 'Log in first' }, 401);
+        const body = (await req.json().catch(() => ({}))) as { items?: { key: string; title: string; publisher: string | null; date: string | null }[] };
+        const items = (body.items ?? []).filter((i) => /^\d+$/.test(i?.key ?? '') && i.title).slice(0, 120);
+        return json(await collectedIssues(uid, items));
       }
       case 'scan': {
         if (req.method !== 'POST') return json({ error: 'POST an image' }, 405);
@@ -199,6 +207,32 @@ async function seriesGenres(uid: string, series: { key: string; title: string; p
         const rows = batch.filter((s) => tags[s.key]?.length).map((s) => ({ key: `genre:${s.key}`, data: tags[s.key] }));
         await cachePutMany(rows);
         for (const r of rows) out[r.key.slice(6)] = r.data as string[];
+      }
+    }
+  }
+  return out;
+}
+
+// issues per collected edition: cached forever (unknowns too), only misses go to Claude
+async function collectedIssues(uid: string, items: { key: string; title: string; publisher: string | null; date: string | null }[]) {
+  const hits = await cacheGetMany<Collects>(items.map((i) => `collects:${i.key}`));
+  const out: Record<string, Collects> = {};
+  const missing = items.filter((i) => {
+    const c = hits.get(`collects:${i.key}`);
+    if (c) out[i.key] = c;
+    return !c;
+  });
+  if (missing.length) {
+    const hourKey = `rl:collects:${uid}:${new Date().toISOString().slice(0, 13)}`;
+    const used = (await cacheGet<number>(hourKey))?.data ?? 0;
+    if (used < 20) {
+      await cachePut(hourKey, used + 1);
+      for (let i = 0; i < missing.length; i += 30) {
+        const batch = missing.slice(i, i + 30);
+        const got = await classifyCollects(batch).catch(() => ({}) as Record<string, Collects>);
+        const rows = batch.filter((b) => got[b.key]).map((b) => ({ key: `collects:${b.key}`, data: got[b.key] }));
+        await cachePutMany(rows);
+        for (const b of batch) if (got[b.key]) out[b.key] = got[b.key];
       }
     }
   }
@@ -470,7 +504,7 @@ async function scanCover(image: string, opts: { debug: boolean; upc: string | nu
 /** Trades: volume number or subtitle ("The Zoo") against the run's collected editions. */
 async function scanTrade(read: CoverRead): Promise<ScanResult | null> {
   const q = read.volume_number != null ? `${read.series} vol ${read.volume_number}` : read.series!;
-  const res = await cached(`search2:${normalize(q)}`, 6 * HOUR, () => locg.search(q));
+  const res = await cached(`search3:${normalize(q)}`, 6 * HOUR, () => locg.search(q));
   const others = (res.more ?? []).filter((h) => h.kind === 'comic').map((h) => (h as { comic: Lite }).comic);
   if (res.top?.kind === 'comic' && res.top.comic.format === 'collection') return { comic: res.top.comic, candidates: others, confidence: read.confidence, matched: true, via: 'cover' };
   const sid = res.top?.kind === 'series' ? res.top.series.id : res.top?.kind === 'comic' ? res.top.comic.seriesId : null;
@@ -527,7 +561,7 @@ async function lookupCode(raw: string): Promise<ScanResult> {
   const title = await cached(`isbn:${bc.isbn}`, 30 * DAY, () => isbnTitle(bc.isbn).then((t) => t ?? ''));
   if (!title) return { comic: null, candidates: [] };
   const q = bookQuery(title);
-  const res = await cached(`search2:${normalize(q)}`, 6 * HOUR, () => locg.search(q));
+  const res = await cached(`search3:${normalize(q)}`, 6 * HOUR, () => locg.search(q));
   const top = res.top && res.top.kind === 'comic' ? res.top.comic : null;
   const more = (res.more ?? []).filter((h) => h.kind === 'comic').map((h) => (h as { comic: Lite }).comic);
   return { comic: top, candidates: more, note: top ? null : `Found “${title}” — pick the right edition` };
