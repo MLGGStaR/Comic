@@ -83,7 +83,8 @@ export function SettingsSheet({ session, onClose }: { session: Session | null; o
       </button>
 
       <p className="text-[11px] text-ink-2 leading-relaxed px-1 my-4">
-        Comic data, covers, community ratings and reviews come from League of Comic Geeks. Values are estimates.
+        Comic data, covers and releases: League of Comic Geeks. Scores and reviews: Comic Book Roundup. Market values
+        (raw copies, estimates): PriceCharting. Cover scanning: Claude.
       </p>
 
       {session ? (

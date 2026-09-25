@@ -55,6 +55,8 @@ export function SearchView() {
         const r = await api.search(query);
         if (seq.current !== my) return;
         setRes(r);
+        // warm the top comic's page so tapping it opens instantly
+        if (r.top?.kind === 'comic') void api.comic(r.top.comic).catch(() => {});
         if (r.top) {
           const next = [query, ...loadRecent().filter((x) => x.toLowerCase() !== query.toLowerCase())].slice(0, 8);
           localStorage.setItem(RECENT_KEY, JSON.stringify(next));

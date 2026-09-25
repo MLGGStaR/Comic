@@ -13,6 +13,7 @@ import { RatingHistogram } from '../ui/RatingHistogram';
 import { Empty } from '../ui/layout';
 import { fmtMoney, fmtDate } from '../lib/format';
 import { Icon } from '../ui/Icon';
+import { useGenres, genresOf } from '../state/genres';
 
 const TITLES: Record<Shelf, string> = { owned: 'Comics', read: 'Read', wishlist: 'Wishlist' };
 const SORTS: Record<Shelf, [ShelfSort, string][]> = {
@@ -52,12 +53,16 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
   const [year, setYear] = useState<number | ''>('');
   const [format, setFormat] = useState<'' | 'issue' | 'collection'>('');
   const [rating, setRating] = useState<number | 'any'>('any');
+  const [genre, setGenre] = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
   const onShelf = useMemo(
     () => entries.filter((e) => (shelf === 'owned' ? e.owned : shelf === 'read' ? e.read : e.wishlist)),
     [entries, shelf],
   );
+  const genreMap = useGenres(onShelf);
+  const genreOf = useMemo(() => genresOf(genreMap), [genreMap]);
+  const genres = useMemo(() => uniq(onShelf.flatMap(genreOf)).sort(), [onShelf, genreOf]);
   const publishers = useMemo(() => uniq(onShelf.map((e) => e.meta.publisher).filter(Boolean) as string[]).sort(), [onShelf]);
   const years = useMemo(
     () => uniq(onShelf.map((e) => Number((e.meta.releaseDate ?? '').slice(0, 4))).filter((y) => y > 0)).sort((x, y) => y - x),
@@ -74,10 +79,12 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
         year: year || undefined,
         format: format || undefined,
         rating: rating === 'any' ? undefined : rating,
+        genre: genre || undefined,
+        genreOf,
       }),
-    [entries, shelf, sort, q, publisher, year, format, rating],
+    [entries, shelf, sort, q, publisher, year, format, rating, genre, genreOf],
   );
-  const activeFilters = [publisher, year, format].filter(Boolean).length;
+  const activeFilters = [publisher, year, format, genre].filter(Boolean).length;
   const today = new Date().toISOString().slice(0, 10);
 
   return (
@@ -131,7 +138,15 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
           <Icon name="chevron-down" size={14} className={showFilters ? 'rotate-180 transition-transform' : 'transition-transform'} />
         </button>
         {showFilters ? (
-          <div className="grid grid-cols-3 gap-2 mb-3 fade-in">
+          <div className="grid grid-cols-2 gap-2 mb-3 fade-in">
+            <select value={genre} onChange={(e) => setGenre(e.target.value)} className={`${select} ${genre ? 'text-lb-green' : ''}`}>
+              <option value="">Genre</option>
+              {genres.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
             <select value={publisher} onChange={(e) => setPublisher(e.target.value)} className={`${select} ${publisher ? 'text-lb-green' : ''}`}>
               <option value="">Publisher</option>
               {publishers.map((p) => (

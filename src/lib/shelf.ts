@@ -29,6 +29,8 @@ export interface ShelfOpts {
   year?: number;
   format?: 'issue' | 'collection';
   rating?: number;
+  genre?: string;
+  genreOf?: (e: Entry) => string[];
 }
 
 const releaseDesc = (a: Entry, b: Entry) => {
@@ -48,6 +50,7 @@ export function shelfView(entries: Entry[], o: ShelfOpts): Entry[] {
     if (o.year && !(e.meta.releaseDate ?? '').startsWith(String(o.year))) return false;
     if (o.format && e.meta.format !== o.format) return false;
     if (o.rating != null && e.rating !== o.rating) return false;
+    if (o.genre && !(o.genreOf?.(e) ?? []).includes(o.genre)) return false;
     return true;
   });
   const byRead = (a: Entry, b: Entry) => (b.readAt ?? '').localeCompare(a.readAt ?? '') || b.updatedAt.localeCompare(a.updatedAt);

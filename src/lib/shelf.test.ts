@@ -103,6 +103,12 @@ describe('shelfView', () => {
   test('value sort puts the most valuable first', () => {
     expect(ids(shelfView(list, { shelf: 'owned', sort: 'value' }))[0]).toBe('d');
   });
+  test('genre filter uses the lookup it is given', () => {
+    const genreOf = (e: Entry) => (e.meta.series === 'Saga' ? ['Sci-Fi', 'Fantasy'] : ['Superhero']);
+    expect(ids(shelfView(list, { shelf: 'read', sort: 'read', genre: 'Fantasy', genreOf }))).toEqual(['a']);
+    expect(ids(shelfView(list, { shelf: 'read', sort: 'read', genre: 'Superhero', genreOf }))).toEqual(['b', 'c']);
+  });
+
   test('text search matches series, publisher filter and rating tier narrow it', () => {
     expect(ids(shelfView(list, { shelf: 'read', sort: 'read', q: 'absolute' }))).toEqual(['b', 'c']);
     expect(ids(shelfView(list, { shelf: 'read', sort: 'read', publisher: 'Image' }))).toEqual(['a']);

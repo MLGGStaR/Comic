@@ -204,6 +204,7 @@ try {
     await page.locator('.screen-in').last().getByRole('button', { name: 'Back' }).click();
     await settle(500);
     await page.getByText('Stats', { exact: true }).click();
+    await page.locator('.screen-in').last().getByText('Superhero').waitFor({ timeout: 30000 }); // genre tags arrived
     await settle(900);
     await screen('13-stats');
     await page.locator('.screen-in').last().getByRole('button', { name: 'Back' }).click();

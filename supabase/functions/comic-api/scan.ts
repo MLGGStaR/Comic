@@ -114,6 +114,59 @@ export async function matchCover(imageBase64: string, cands: Candidate[]): Promi
   return { index: hit, confidence: r.confidence, reason: r.reason };
 }
 
+export const GENRES = [
+  'Superhero',
+  'Sci-Fi',
+  'Fantasy',
+  'Horror',
+  'Crime',
+  'Mystery',
+  'Action',
+  'Drama',
+  'Comedy',
+  'Romance',
+  'Western',
+  'War',
+  'Slice of Life',
+  'Manga',
+  'Kids',
+  'Non-fiction',
+] as const;
+
+const GENRE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['items'],
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'genres'],
+        properties: {
+          key: { type: 'string' },
+          genres: { type: 'array', items: { type: 'string', enum: [...GENRES] }, description: '1–2 genres, most defining first' },
+        },
+      },
+    },
+  },
+} as const;
+
+/** Genre tags for comic series (by title + publisher), one batched call. */
+export async function classifyGenres(series: { key: string; title: string; publisher: string | null }[]): Promise<Record<string, string[]>> {
+  if (!series.length) return {};
+  const list = series.map((s) => `${s.key} | ${s.title}${s.publisher ? ` (${s.publisher})` : ''}`).join('\n');
+  const r = await structured<{ items: { key: string; genres: string[] }[] }>(
+    'You tag comic book series with genres for a collector app. Use your knowledge of each series; superhero books are "Superhero" even when they are also sci-fi. Pick 1–2 genres from the allowed list.',
+    [{ type: 'text', text: `Tag each series (format: key | title (publisher)):\n${list}` }],
+    GENRE_SCHEMA,
+  );
+  const out: Record<string, string[]> = {};
+  for (const it of r.items) out[it.key] = it.genres.slice(0, 2);
+  return out;
+}
+
 /** Keep the main cover plus the variants that best fit the printed hints. */
 export function shortlist(cands: Candidate[], hint: string | null, max = 12): Candidate[] {
   if (cands.length <= max) return cands;

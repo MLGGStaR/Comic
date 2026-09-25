@@ -15,6 +15,31 @@ export async function cacheGet<T>(key: string): Promise<{ data: T; at: number } 
   }
 }
 
+/** Many keys in one round trip. */
+export async function cacheGetMany<T>(keys: string[]): Promise<Map<string, T>> {
+  const out = new Map<string, T>();
+  if (!keys.length) return out;
+  const list = keys.map((k) => `"${k.replace(/["\\]/g, '')}"`).join(',');
+  try {
+    const r = await fetch(`${URL_}/rest/v1/comic_cache?select=key,data&key=in.(${encodeURIComponent(list)})`, { headers: H });
+    if (!r.ok) return out;
+    for (const row of (await r.json()) as { key: string; data: T }[]) out.set(row.key, row.data);
+  } catch {
+    // treat as all misses
+  }
+  return out;
+}
+
+export async function cachePutMany(rows: { key: string; data: unknown }[]): Promise<void> {
+  if (!rows.length) return;
+  const at = new Date().toISOString();
+  await fetch(`${URL_}/rest/v1/comic_cache`, {
+    method: 'POST',
+    headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(rows.map((r) => ({ ...r, updated_at: at }))),
+  }).catch(() => {});
+}
+
 export async function cachePut(key: string, data: unknown): Promise<void> {
   try {
     await fetch(`${URL_}/rest/v1/comic_cache`, {

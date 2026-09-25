@@ -8,8 +8,8 @@
 //   POST ?op=scan   {image: base64 jpeg}
 // Everything is normalised into the app's ComicLite / ComicDetail shapes and
 // cached in comic_cache so the sources see as few requests as possible.
-import { cached, cacheGet, cachePut, upcGet, upcPut } from '../_shared/cache.ts';
-import { readCover, matchCover, shortlist, type Candidate } from './scan.ts';
+import { cached, cacheGet, cachePut, cacheGetMany, cachePutMany, upcGet, upcPut } from '../_shared/cache.ts';
+import { readCover, matchCover, shortlist, classifyGenres, type Candidate } from './scan.ts';
 import { decodeBarcode } from '../_shared/barcode.ts';
 import { normalize } from '../_shared/query.ts';
 import { splitTitle } from '../_shared/locg.ts';
@@ -67,6 +67,14 @@ Deno.serve(async (req) => {
       }
       case 'upc':
         return json(await lookupCode(p('code')));
+      case 'genres': {
+        if (req.method !== 'POST') return json({ error: 'POST series' }, 405);
+        const uid = userId(req);
+        if (!uid) return json({ error: 'Log in first' }, 401);
+        const body = (await req.json().catch(() => ({}))) as { series?: { key: string; title: string; publisher: string | null }[] };
+        const series = (body.series ?? []).filter((s) => s?.key && s?.title).slice(0, 200);
+        return json(await seriesGenres(uid, series));
+      }
       case 'scan': {
         if (req.method !== 'POST') return json({ error: 'POST an image' }, 405);
         const uid = userId(req);
@@ -174,6 +182,33 @@ async function allowScan(uid: string): Promise<boolean> {
   if (n > 60) return false;
   await cachePut(key, n);
   return true;
+}
+
+// genre tags per series: cached forever, only misses go to Claude (≤40 per call)
+async function seriesGenres(uid: string, series: { key: string; title: string; publisher: string | null }[]) {
+  const keys = series.map((s) => `genre:${s.key}`);
+  const hits = await cacheGetMany<string[]>(keys);
+  const out: Record<string, string[]> = {};
+  const missing = series.filter((s) => {
+    const g = hits.get(`genre:${s.key}`);
+    if (g) out[s.key] = g;
+    return !g;
+  });
+  if (missing.length) {
+    const hourKey = `rl:genre:${uid}:${new Date().toISOString().slice(0, 13)}`;
+    const used = (await cacheGet<number>(hourKey))?.data ?? 0;
+    if (used < 30) {
+      await cachePut(hourKey, used + 1);
+      for (let i = 0; i < missing.length; i += 40) {
+        const batch = missing.slice(i, i + 40);
+        const tags = await classifyGenres(batch).catch(() => ({}) as Record<string, string[]>);
+        const rows = batch.filter((s) => tags[s.key]?.length).map((s) => ({ key: `genre:${s.key}`, data: tags[s.key] }));
+        await cachePutMany(rows);
+        for (const r of rows) out[r.key.slice(6)] = r.data as string[];
+      }
+    }
+  }
+  return out;
 }
 
 async function scanCover(image: string) {

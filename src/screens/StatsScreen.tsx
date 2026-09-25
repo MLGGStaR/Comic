@@ -7,6 +7,7 @@ import { useUserEntries } from '../state/userEntries';
 import { profileById, useProfiles } from '../state/profiles';
 import { useActions } from '../state/actions';
 import { RatingHistogram } from '../ui/RatingHistogram';
+import { useGenres, genresOf } from '../state/genres';
 import { SectionHeader, Stat, Empty } from '../ui/layout';
 import type { Entry } from '../types';
 
@@ -20,6 +21,13 @@ export function StatsScreen({ userId, onClose }: { userId: string; onClose: () =
   const who = a.selfId === userId ? null : profileById(userId)?.username;
   const s = useMemo(() => computeStats(entries), [entries]);
   const [rating, setRating] = useState<number | 'any'>('any');
+  const genreMap = useGenres(s.read);
+  const genreRows = useMemo(() => {
+    const of = genresOf(genreMap);
+    const m = new Map<string, number>();
+    for (const e of s.read) for (const g of of(e)) m.set(g, (m.get(g) ?? 0) + 1);
+    return [...m.entries()].map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n).slice(0, 8);
+  }, [genreMap, s.read]);
 
   return (
     <Screen onClose={onClose} title={who ? `${who} · Stats` : 'Stats'}>
@@ -44,6 +52,13 @@ export function StatsScreen({ userId, onClose }: { userId: string; onClose: () =
           <section>
             <SectionHeader>Ratings</SectionHeader>
             <RatingHistogram countFor={(t) => s.read.filter((e) => e.rating === t).length} active={rating} onSelect={setRating} />
+          </section>
+        ) : null}
+
+        {genreRows.length ? (
+          <section>
+            <SectionHeader>Genres</SectionHeader>
+            <HBars rows={genreRows} />
           </section>
         ) : null}
 
