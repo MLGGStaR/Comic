@@ -9,23 +9,13 @@ import type { ComicDetail, ComicLite, SearchResult, SeriesDetail } from '../type
 const FN = `${SUPABASE_URL}/functions/v1/comic-api`;
 const HOUR = 3600e3;
 
-export interface PriceEstimate {
-  comicId: string;
-  variantId?: string | null;
-  raw: number | null; // typical raw/ungraded copy
-  low?: number | null;
-  high?: number | null;
-  sales?: number | null; // how many data points
-  source: string;
-  url?: string | null;
-  at: string;
-}
-
 export interface UpcMatch {
-  comic: ComicLite | null;
-  variantId?: string | null;
+  comic: ComicLite | null; // the issue (main listing)
+  variantId?: string | null; // the exact cover, when it isn't the main one
+  variantCover?: string | null;
+  note?: string | null; // variant name, e.g. "Cover B Jim Lee Variant"
+  confidence?: number | null; // 0–1 (cover scans)
   candidates: ComicLite[];
-  note?: string | null;
 }
 
 async function authHeader(): Promise<string> {
@@ -56,7 +46,18 @@ async function fetchJson<T>(op: string, params: Record<string, string>, init?: R
 }
 
 type Cached<T> = { t: number; data: T };
-const cacheKey = (op: string, params: Record<string, string>) => `api:${op}:${JSON.stringify(params)}`;
+// comic lookups carry hints (title, series) that shouldn't split the cache
+const cacheKey = (op: string, params: Record<string, string>) =>
+  op === 'comic' ? `api:comic:${params.id}` : `api:${op}:${JSON.stringify(params)}`;
+
+export function comicParams(c: { id: string; title?: string | null; seriesId?: string | null; series?: string | null; publisher?: string | null }) {
+  const p: Record<string, string> = { id: c.id };
+  if (c.title) p.title = c.title;
+  if (c.seriesId) p.seriesId = c.seriesId;
+  if (c.series) p.series = c.series;
+  if (c.publisher) p.publisher = c.publisher;
+  return p;
+}
 
 /** Cached GET: fresh cache → return; else fetch (falling back to stale cache on failure). */
 async function cachedCall<T>(op: string, params: Record<string, string>, ttl: number): Promise<T> {
@@ -93,12 +94,10 @@ function weekTtl(date: string): number {
 
 export const api = {
   search: (q: string) => cachedCall<SearchResult>('search', { q: q.trim().toLowerCase() }, 6 * HOUR),
-  comic: (id: string) => cachedCall<ComicDetail>('comic', { id }, 12 * HOUR),
+  comic: (c: ComicLite) => cachedCall<ComicDetail>('comic', comicParams(c), 12 * HOUR),
   series: (id: string) => cachedCall<SeriesDetail>('series', { id }, 6 * HOUR),
   week: (date: string) => cachedCall<ComicLite[]>('week', { date }, weekTtl(date)),
   upc: (code: string) => cachedCall<UpcMatch>('upc', { code }, 24 * HOUR),
-  price: (id: string, variant?: string) =>
-    cachedCall<PriceEstimate>('price', variant ? { id, variant } : { id }, 24 * HOUR),
   swr,
   weekTtl,
   /** Identify a comic from a photo of its cover (server calls Claude vision). */

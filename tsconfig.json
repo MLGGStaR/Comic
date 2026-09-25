@@ -9,9 +9,11 @@
     "skipLibCheck": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "types": ["vite/client"],
     "noEmit": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }

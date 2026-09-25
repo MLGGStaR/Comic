@@ -67,7 +67,7 @@ export function HomeView() {
   const tint = useCoverTint(recentReads[0]?.meta.cover ?? list[0]?.meta.cover);
 
   const current = weeks[thisWeek] ?? [];
-  const isMine = (c: ComicLite) => c.seriesId != null && mine.has(c.seriesId);
+  const isMine = mine;
   const pull = useMemo(() => current.filter(isMine).sort((x, y) => (y.pulls ?? 0) - (x.pulls ?? 0)), [current, mine]); // eslint-disable-line react-hooks/exhaustive-deps
   const hot = useMemo(
     () => current.filter((c) => c.format === 'issue' && !isMine(c)).sort((x, y) => (y.pulls ?? 0) - (x.pulls ?? 0)).slice(0, 20),

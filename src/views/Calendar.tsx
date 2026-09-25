@@ -17,6 +17,7 @@ type Fmt = 'all' | 'issue' | 'collection';
 type Sort = 'popular' | 'az' | 'publisher';
 
 const MAIN_PUBS = ['DC Comics', 'Marvel Comics', 'Image Comics', 'Dark Horse Comics', 'BOOM! Studios', 'IDW Publishing'];
+const MANGA = /\b(VIZ|Seven Seas|Kodansha|Yen Press|Shueisha|Square Enix|Tokyopop|J-Novel|Denpa|Vertical|Ghost Ship|Airship|Kaiten|One Peace|Udon)\b/i;
 
 export function CalendarView() {
   const today = toIso(new Date());
@@ -29,12 +30,14 @@ export function CalendarView() {
   const [selected, setSelected] = useState<string | null>(null);
   const [scope, setScope] = useState<Scope>(() => (localStorage.getItem('lbx-cal-scope') as Scope) || 'all');
   const [fmt, setFmt] = useState<Fmt>('all');
-  const [pub, setPub] = useState('');
+  // 'comics' (default) hides manga volumes; 'all' shows everything
+  const [pub, setPub] = useState(() => localStorage.getItem('lbx-cal-pub') || 'comics');
   const [sort, setSort] = useState<Sort>('popular');
   const [limit, setLimit] = useState(40);
   const mine = useMySeries();
 
   useEffect(() => localStorage.setItem('lbx-cal-scope', scope), [scope]);
+  useEffect(() => localStorage.setItem('lbx-cal-pub', pub), [pub]);
 
   const grid = useMemo(() => monthGrid(ym.y, ym.m), [ym]);
   const weeks = useMemo(() => weeksCovering(grid[0], grid[41]), [grid]);
@@ -74,10 +77,9 @@ export function CalendarView() {
     return out;
   }, [byWeek, weeks]);
 
-  const passes = (c: ComicLite) =>
-    (scope === 'all' || (c.seriesId != null && mine.has(c.seriesId))) &&
-    (fmt === 'all' || c.format === fmt) &&
-    (!pub || (pub === 'other' ? !MAIN_PUBS.includes(c.publisher ?? '') : c.publisher === pub));
+  const pubOk = (p: string) =>
+    pub === 'all' ? true : pub === 'comics' ? !MANGA.test(p) : pub === 'other' ? !MAIN_PUBS.includes(p) && !MANGA.test(p) : p === pub;
+  const passes = (c: ComicLite) => (scope === 'all' || mine(c)) && (fmt === 'all' || c.format === fmt) && pubOk(c.publisher ?? '');
 
   const dayList = (d: string) => (byDay.get(d) ?? []).filter(passes);
 
@@ -110,7 +112,7 @@ export function CalendarView() {
   const sel = selected ? dayList(selected) : [];
   const sorted = useMemo(() => {
     const list = [...sel];
-    const pin = (c: ComicLite) => (c.seriesId != null && mine.has(c.seriesId) ? 0 : 1);
+    const pin = (c: ComicLite) => (mine(c) ? 0 : 1);
     list.sort((a, b) => {
       const p = pin(a) - pin(b);
       if (p) return p;
@@ -121,7 +123,7 @@ export function CalendarView() {
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel.length, selected, sort, mine, scope, fmt, pub, byDay]);
-  const pinnedCount = sorted.filter((c) => c.seriesId != null && mine.has(c.seriesId)).length;
+  const pinnedCount = sorted.filter(mine).length;
 
   return (
     <div className="space-y-4">
@@ -167,9 +169,10 @@ export function CalendarView() {
         <select
           value={pub}
           onChange={(e) => setPub(e.target.value)}
-          className={`bg-bg-1 rounded-xl px-3 py-2 text-[13px] font-semibold ${pub ? 'text-lb-green' : 'text-ink-0'}`}
+          className={`bg-bg-1 rounded-xl px-3 py-2 text-[13px] font-semibold ${pub !== 'comics' ? 'text-lb-green' : 'text-ink-0'}`}
         >
-          <option value="">All publishers</option>
+          <option value="comics">All comics</option>
+          <option value="all">Comics + manga</option>
           {MAIN_PUBS.map((p) => (
             <option key={p} value={p}>
               {p.replace(' Comics', '').replace(' Publishing', '')}
@@ -214,7 +217,7 @@ export function CalendarView() {
             const list = dayList(d);
             const n = list.length;
             const top = n ? [...list].sort((a, b) => (b.pulls ?? 0) - (a.pulls ?? 0))[0] : null;
-            const hasMine = list.some((c) => c.seriesId != null && mine.has(c.seriesId));
+            const hasMine = list.some(mine);
             const isSel = d === selected;
             const isToday = d === today;
             return (
@@ -280,8 +283,8 @@ export function CalendarView() {
                     key={c.id}
                     comic={c}
                     showStatus
-                    label={c.seriesId != null && mine.has(c.seriesId) ? 'Pull' : c.format === 'collection' ? 'TPB' : undefined}
-                    labelTone={c.seriesId != null && mine.has(c.seriesId) ? 'green' : 'dark'}
+                    label={mine(c) ? 'Pull' : c.format === 'collection' ? 'TPB' : undefined}
+                    labelTone={mine(c) ? 'green' : 'dark'}
                   />
                 ))}
               </div>

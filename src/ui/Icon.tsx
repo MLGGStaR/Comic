@@ -61,12 +61,12 @@ export function Icon({ name, size = 24, className, strokeWidth = 2 }: { name: Ic
         </svg>
       );
     case 'box':
-      // a longbox with comics standing in it
+      // your stack of comics: a fanned pair of covers
       return (
         <svg {...p}>
-          <path d="M3 10h18v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
-          <path d="M6 10V5.5h3.5V10M10.5 10V4h3.5v6M15 10V6.5h3V10" />
-          <path d="M9.5 15h5" />
+          <rect x="3.2" y="5.5" width="11" height="15.5" rx="1.6" transform="rotate(-9 8.7 13.2)" />
+          <rect x="9.5" y="3" width="11" height="15.5" rx="1.6" />
+          <path d="M12 6.5h6" />
         </svg>
       );
     case 'plus':

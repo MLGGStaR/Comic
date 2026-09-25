@@ -2,7 +2,9 @@
 // your rating, then tabs — Overview, Variants (log each cover you own) and
 // Reviews (friends first, then the community and critics).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api/client';
+import { api, comicParams } from '../api/client';
+import { priceFor, type PriceEstimate } from '../api/prices';
+import { estimateFor } from '../state/values';
 import type { ComicDetail, ComicLite, Variant, Review } from '../types';
 import { Screen } from '../ui/Screen';
 import { Cover } from '../ui/Cover';
@@ -15,7 +17,7 @@ import { useActions } from '../state/actions';
 import { collection, useEntry } from '../state/collection';
 import { profileById, useProfiles } from '../state/profiles';
 import { supabase } from '../supabase';
-import { fmtDate, fmtMoney, relTime } from '../lib/format';
+import { fmtDate, fmtMoney, relTime, shortDate } from '../lib/format';
 import { isoDay } from '../lib/entry';
 import { valueOf } from '../lib/shelf';
 import { useBackLayer } from '../lib/backstack';
@@ -35,10 +37,12 @@ export function ComicScreen({ id, seed, onClose }: { id: string; seed?: ComicLit
   useEffect(() => {
     let alive = true;
     setErr(null);
-    api.swr<ComicDetail>('comic', { id }, 12 * 3600e3, (d) => alive && setDetail(d)).catch((e: Error) => alive && setErr(e.message));
+    const hint = seed ?? collection.entry(id)?.meta ?? { id };
+    api.swr<ComicDetail>('comic', comicParams(hint), 12 * 3600e3, (d) => alive && setDetail(d)).catch((e: Error) => alive && setErr(e.message));
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   // the lite record everything else keys on (detail wins once it arrives)
@@ -161,18 +165,23 @@ function TitleBlock({ comic, detail }: { comic: ComicLite; detail: ComicDetail |
         ) : null}
         {comic.price != null ? <span className="text-ink-2"> · {fmtMoney(comic.price, { cents: true })}</span> : null}
       </div>
-      {detail?.rating != null || detail?.criticScore != null || comic.pulls ? (
-        <div className="flex justify-center gap-4 mt-3 text-xs">
-          {detail?.rating != null ? (
-            <span className="text-ink-1">
-              <span className="text-lb-orange">★</span> <b className="text-ink-0">{detail.rating.toFixed(1)}</b>
-              {detail.ratingCount ? <span className="text-ink-2"> ({compact(detail.ratingCount)})</span> : null}
-            </span>
-          ) : null}
+      {detail?.criticScore != null || detail?.userScore != null || comic.consensus != null || comic.pulls ? (
+        <div className="flex justify-center flex-wrap gap-x-4 gap-y-1 mt-3 text-xs">
           {detail?.criticScore != null ? (
             <span className="text-ink-1">
               Critics <b className="text-ink-0">{detail.criticScore.toFixed(1)}</b>
-              <span className="text-ink-2">/10</span>
+              {detail.criticCount ? <span className="text-ink-2"> ({detail.criticCount})</span> : null}
+            </span>
+          ) : null}
+          {detail?.userScore != null ? (
+            <span className="text-ink-1">
+              Readers <b className="text-ink-0">{detail.userScore.toFixed(1)}</b>
+              {detail.userCount ? <span className="text-ink-2"> ({compact(detail.userCount)})</span> : null}
+            </span>
+          ) : null}
+          {comic.consensus != null ? (
+            <span className="text-ink-1">
+              <b className="text-lb-green">{comic.consensus}%</b> liked
             </span>
           ) : null}
           {comic.pulls ? <span className="text-ink-2">{compact(comic.pulls)} pulls</span> : null}
@@ -271,6 +280,7 @@ function Overview({ comic, detail, err }: { comic: ComicLite; detail: ComicDetai
       ) : null}
 
       <YourCopy comic={comic} />
+      <MarketValue comic={comic} />
 
       {creators.length ? (
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -294,21 +304,21 @@ function Overview({ comic, detail, err }: { comic: ComicLite; detail: ComicDetai
           ))}
       </div>
 
-      {detail.prevId || detail.nextId ? (
+      {detail.prev || detail.next ? (
         <div className="grid grid-cols-2 gap-2">
           <button
-            disabled={!detail.prevId}
-            onClick={() => detail.prevId && a.openComicId(detail.prevId)}
+            disabled={!detail.prev}
+            onClick={() => detail.prev && a.openComic(detail.prev)}
             className="py-2.5 rounded-xl bg-bg-1 text-xs font-semibold text-ink-1 disabled:opacity-30 flex items-center justify-center gap-1"
           >
-            <Icon name="chevron-left" size={14} /> Previous issue
+            <Icon name="chevron-left" size={14} /> {detail.prev?.number ? `#${detail.prev.number}` : 'Previous'}
           </button>
           <button
-            disabled={!detail.nextId}
-            onClick={() => detail.nextId && a.openComicId(detail.nextId)}
+            disabled={!detail.next}
+            onClick={() => detail.next && a.openComic(detail.next)}
             className="py-2.5 rounded-xl bg-bg-1 text-xs font-semibold text-ink-1 disabled:opacity-30 flex items-center justify-center gap-1"
           >
-            Next issue <Icon name="chevron-right" size={14} />
+            {detail.next?.number ? `#${detail.next.number}` : 'Next'} <Icon name="chevron-right" size={14} />
           </button>
         </div>
       ) : null}
@@ -335,28 +345,54 @@ function Overview({ comic, detail, err }: { comic: ComicLite; detail: ComicDetai
   );
 }
 
+function MarketValue({ comic }: { comic: ComicLite }) {
+  const [p, setP] = useState<PriceEstimate | null | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    priceFor(comic)
+      .then((v) => alive && setP(v))
+      .catch(() => alive && setP(null));
+    return () => {
+      alive = false;
+    };
+  }, [comic]);
+  if (comic.format !== 'issue') return null;
+  if (p === undefined) return <div className="h-14 rounded-2xl skeleton" />;
+  if (!p?.raw) return null;
+  return (
+    <a href={p.url} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-2xl bg-bg-1 border border-white/[0.05] px-4 py-3">
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold">Market value</div>
+        <div className="text-[11px] text-ink-2 mt-0.5">raw copy · via PriceCharting ↗</div>
+      </div>
+      <div className="text-right">
+        <div className="font-display text-xl font-extrabold text-lb-green leading-none">{fmtMoney(p.raw)}</div>
+        {p.vf ? <div className="text-[11px] text-ink-2 mt-1">8.0 graded {fmtMoney(p.vf)}</div> : null}
+      </div>
+    </a>
+  );
+}
+
 function YourCopy({ comic }: { comic: ComicLite }) {
   const entry = useEntry(comic.id);
   const [edit, setEdit] = useState(false);
   const [paid, setPaid] = useState('');
   const [value, setValue] = useState('');
-  const [est, setEst] = useState<{ raw: number | null; source: string; sales?: number | null } | null>(null);
+  const variantKey = entry?.variants.map((v) => v.id).join(',') ?? '';
   useEffect(() => {
     if (!entry?.owned) return;
     let alive = true;
-    api
-      .price(comic.id)
-      .then((p) => {
-        if (!alive) return;
-        setEst(p);
-        if (p.raw != null && entry.est == null && !entry.variants.length) void collection.patch(comic, { est: p.raw });
+    estimateFor(entry)
+      .then((est) => {
+        const cur = collection.entry(comic.id);
+        if (alive && cur?.owned && est !== cur.est) void collection.patch(cur.meta, { est });
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [comic.id, entry?.owned]);
+  }, [comic.id, entry?.owned, variantKey]);
   if (!entry?.owned) return null;
   const v = valueOf(entry);
   const copies = Math.max(1, entry.variants.length);
@@ -373,7 +409,7 @@ function YourCopy({ comic }: { comic: ComicLite }) {
           <div className="text-[10px] uppercase tracking-[0.14em] text-lb-green font-bold">Your copy{copies > 1 ? `ies · ${copies}` : ''}</div>
           <div className="font-display text-[26px] font-extrabold leading-none mt-1.5">{fmtMoney(v.amount)}</div>
           <div className="text-[11px] text-ink-2 mt-1">
-            {v.basis === 'yours' ? 'your value' : v.basis === 'market' ? `market estimate${est?.source ? ` · ${est.source}` : ''}` : v.basis === 'cover' ? 'at cover price' : 'no value yet'}
+            {v.basis === 'yours' ? 'your value' : v.basis === 'market' ? 'market estimate' : v.basis === 'cover' ? 'at cover price' : 'no value yet'}
             {entry.paid != null ? ` · paid ${fmtMoney(entry.paid)}` : ''}
           </div>
         </div>
@@ -498,6 +534,8 @@ function Reviews({ comic, detail }: { comic: ComicLite; detail: ComicDetail | nu
   const community = (detail?.reviews ?? []).filter((r) => !r.critic);
   const critics = (detail?.reviews ?? []).filter((r) => r.critic);
   const friendAvg = friends.filter((f) => f.rating != null);
+  const [showCritics, setShowCritics] = useState(6);
+  const [showCommunity, setShowCommunity] = useState(10);
 
   return (
     <div className="space-y-6 fade-in">
@@ -583,10 +621,15 @@ function Reviews({ comic, detail }: { comic: ComicLite; detail: ComicDetail | nu
             Critics{detail?.criticScore != null ? ` · ${detail.criticScore.toFixed(1)}/10` : ''}
           </div>
           <div className="space-y-2">
-            {critics.map((r, i) => (
+            {critics.slice(0, showCritics).map((r, i) => (
               <ReviewCard key={i} r={r} />
             ))}
           </div>
+          {critics.length > showCritics ? (
+            <button onClick={() => setShowCritics((n) => n + 20)} className="w-full mt-2 py-2 rounded-xl bg-bg-1 text-xs font-semibold text-ink-1">
+              {critics.length - showCritics} more critic reviews
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -598,14 +641,26 @@ function Reviews({ comic, detail }: { comic: ComicLite; detail: ComicDetail | nu
             <div className="h-16 rounded-xl skeleton" />
           </div>
         ) : community.length ? (
-          <div className="space-y-2">
-            {community.map((r, i) => (
-              <ReviewCard key={i} r={r} />
-            ))}
-          </div>
+          <>
+            <div className="space-y-2">
+              {community.slice(0, showCommunity).map((r, i) => (
+                <ReviewCard key={i} r={r} />
+              ))}
+            </div>
+            {community.length > showCommunity ? (
+              <button onClick={() => setShowCommunity((n) => n + 20)} className="w-full mt-2 py-2 rounded-xl bg-bg-1 text-xs font-semibold text-ink-1">
+                {community.length - showCommunity} more reader reviews
+              </button>
+            ) : null}
+          </>
         ) : (
-          <div className="text-xs text-ink-2 py-3">No community reviews yet.</div>
+          <div className="text-xs text-ink-2 py-3">No reader reviews yet.</div>
         )}
+        {detail?.reviewsUrl ? (
+          <a href={detail.reviewsUrl} target="_blank" rel="noreferrer" className="block text-center text-[11px] text-ink-2 pt-3">
+            Reviews from Comic Book Roundup ↗
+          </a>
+        ) : null}
       </div>
     </div>
   );
@@ -617,11 +672,14 @@ function ReviewCard({ r }: { r: Review }) {
   return (
     <div className="rounded-xl bg-bg-1 p-3">
       <div className="flex items-center gap-2">
-        {r.avatar ? <img src={r.avatar} alt="" className="w-6 h-6 rounded-full object-cover bg-bg-2" referrerPolicy="no-referrer" /> : null}
-        <span className="text-[13px] font-semibold truncate">{r.user ?? r.source}</span>
-        {r.rating != null ? <span className="stars text-[12px]">{starsOf(r.rating)}</span> : null}
+        {r.avatar ? <img src={r.avatar} alt="" className="w-6 h-6 rounded-full object-cover bg-bg-2 flex-shrink-0" referrerPolicy="no-referrer" /> : null}
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold truncate leading-tight">{r.user ?? r.source}</div>
+          {r.critic && r.source && r.source !== r.user ? <div className="text-[10px] text-ink-2 truncate">{r.source}</div> : null}
+        </div>
+        {r.rating != null ? <span className="stars text-[12px] flex-shrink-0">{starsOf(r.rating)}</span> : null}
         <span className="flex-1" />
-        {r.date ? <span className="text-[10px] text-ink-2">{fmtDate(r.date, { year: true })}</span> : null}
+        {r.date ? <span className="text-[10px] text-ink-2 flex-shrink-0">{shortDate(r.date)}</span> : null}
       </div>
       {r.text ? (
         <p className={`text-[13px] text-ink-1 leading-relaxed mt-1.5 whitespace-pre-line ${open || !long ? '' : 'line-clamp-5'}`}>{r.text}</p>

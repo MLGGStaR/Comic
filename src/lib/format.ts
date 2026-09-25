@@ -8,6 +8,16 @@ export function fmtDate(iso: string | null | undefined, opts?: { year?: boolean 
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(showYear ? { year: 'numeric' } : {}) });
 }
 
+/** ISO ("2024-11-13") or prose ("Nov 13, 2024") dates → "Nov 13" / "Nov 13, 2024". */
+export function shortDate(s: string | null | undefined): string {
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return fmtDate(s);
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  const showYear = d.getFullYear() !== new Date().getFullYear();
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(showYear ? { year: 'numeric' } : {}) });
+}
+
 export function fmtMoney(n: number | null | undefined, opts?: { cents?: boolean; compact?: boolean }): string {
   if (n == null || Number.isNaN(n)) return '—';
   if (opts?.compact && Math.abs(n) >= 10000) {

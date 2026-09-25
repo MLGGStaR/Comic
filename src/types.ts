@@ -18,6 +18,7 @@ export interface ComicLite {
   price: number | null; // cover price, USD
   pulls?: number | null; // popularity signal from the data source
   rating?: number | null; // community rating, 0–5
+  consensus?: number | null; // % of readers who liked it (League of Comic Geeks)
 }
 
 export interface Variant {
@@ -56,9 +57,14 @@ export interface ComicDetail extends ComicLite {
   ratingCount?: number | null;
   criticScore?: number | null; // 0–10
   criticCount?: number | null;
-  prevId?: string | null;
-  nextId?: string | null;
+  userScore?: number | null; // 0–10, Comic Book Roundup readers
+  userCount?: number | null;
+  prev?: ComicLite | null;
+  next?: ComicLite | null;
+  sku?: string | null;
+  foc?: string | null; // "Sep 28" (upcoming only)
   url?: string | null; // source page
+  reviewsUrl?: string | null;
   characters?: string[];
   genres?: string[];
 }

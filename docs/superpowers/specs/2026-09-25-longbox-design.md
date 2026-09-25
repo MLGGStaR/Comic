@@ -63,9 +63,17 @@ The + menu (Search tab and My Comics) offers **Scan cover**, **Scan barcode**, *
   IndexedDB stale-while-revalidate layer (instant screens, offline copies).
 - **Secrets**: the Anthropic key lives only in Supabase function secrets; nothing secret ships in the repo.
 
-## Data sources
+## Data sources (probed 2026-09-25)
 
-_Filled in from the probe results — see the Data sources section below._
+| Need | Source | How | Notes |
+|---|---|---|---|
+| Search, series runs, weekly releases, issue detail + every variant, barcode → exact issue/variant | **League of Comic Geeks** `/comic/get_comics` list engine | Edge Function (Deno) → parse HTML fragments in the JSON (`supabase/functions/_shared/locg.ts`) | The only LoCG endpoint reachable from server IPs; issue pages, quick search and the review feed are blocked there. Search = series search → in-series search filtered by format. A full 17-digit UPC as the search text resolves the exact issue *and* variant. Weekly lists drop $0.00 digital chapters and foreign reprint publishers. Their ToS forbids scraping: requests are low-volume and cached (search 6 h, series 12 h, weeks 6 h / 7 d, comics 12 h). |
+| Critic + reader scores, reviews, writer/artist | **Comic Book Roundup** issue pages | Edge Function (`_shared/cbr.ts`) | Direct URL from publisher / series / start year / number, CBR search fallback; series → CBR path cached 30 d. |
+| Market value (raw copies) | **PriceCharting** `search-products` JSON | **From the phone** (their Cloudflare blocks server IPs; CORS allows our origin) | `price1` = ungraded. Variant tags matched against variant names (`src/lib/pricing.ts`). Cached on-device 24 h, requests paced. |
+| ISBN → trade title | Open Library, Google Books fallback | Edge Function | Title "Absolute Batman: Vol. 1: The Zoo" → query "absolute batman vol 1". |
+| Cover photo → comic | **Claude** (`claude-opus-5`, effort low, structured JSON, server-side fallbacks on) | Edge Function, signed-in users only, 60 scans/user/hour | Read pass (series, number, publisher, variant hints) → search → compare pass against the issue's covers (main + ≤11 likeliest variants). Anthropic key lives only in Supabase secrets. |
+
+Rejected: Metron (needs an account; aggressive fail2ban), ComicVine (key, no UPC/variants), GCD (30 req/h anonymous), eBay sold listings (blocked / sign-in), GoCollect / CovrPrice / ComicsPriceGuide (paywalled).
 
 ## Testing
 
