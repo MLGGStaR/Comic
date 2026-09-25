@@ -176,8 +176,10 @@ export function shortlist(cands: Candidate[], hint: string | null, max = 12): Ca
     .map((c, i) => {
       const cw = c.name.toLowerCase().split(/[^a-z0-9:]+/);
       const hits = cw.filter((w) => words.has(w)).length;
-      const reprint = /print|reprint/i.test(c.name) ? -1 : 0;
-      return { c, s: hits * 10 + reprint - i * 0.01 };
+      // Heavily downrank reprints, printings, facsimiles, etc. unless explicitly hinted
+      const isPrint = /^(\d+(?:st|nd|rd|th))?\s*(?:printing|reprint|facsimile|edition|newsstand|newsprint)/i.test(c.name);
+      const printPenalty = isPrint && !words.has('print') && !words.has('printing') ? -10 : 0;
+      return { c, s: hits * 10 + printPenalty - i * 0.01 };
     })
     .sort((a, b) => b.s - a.s)
     .slice(0, max - 1)

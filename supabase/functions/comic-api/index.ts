@@ -80,10 +80,10 @@ Deno.serve(async (req) => {
         const uid = userId(req);
         if (!uid) return json({ error: 'Log in to scan covers' }, 401);
         if (!(await allowScan(uid))) return json({ error: 'Scan limit reached — try again in a bit' }, 429);
-        const body = (await req.json().catch(() => ({}))) as { image?: string };
+        const body = (await req.json().catch(() => ({}))) as { image?: string; debug?: boolean };
         if (!body.image || body.image.length < 1000) return json({ error: 'No photo' }, 400);
         if (body.image.length > 7_000_000) return json({ error: 'Photo too large' }, 413);
-        return json(await scanCover(body.image));
+        return json(await scanCover(body.image, !!body.debug));
       }
       default:
         return json({ error: `unknown op "${op}"` }, 400);
@@ -211,7 +211,7 @@ async function seriesGenres(uid: string, series: { key: string; title: string; p
   return out;
 }
 
-async function scanCover(image: string) {
+async function scanCover(image: string, debug = false) {
   const read = await readCover(image);
   const readOut = {
     series: read.series ?? undefined,
@@ -219,7 +219,12 @@ async function scanCover(image: string) {
     publisher: read.publisher ?? undefined,
     variant: read.variant_hint ?? read.cover_artist ?? undefined,
   };
-  if (!read.is_comic || !read.series) return { comic: null, candidates: [], read: readOut, note: 'That doesn’t look like a comic cover' };
+  if (!read.is_comic || !read.series) return { comic: null, candidates: [], read: readOut, note: ‘That doesn’t look like a comic cover’ };
+
+  // Reject low-confidence reads: if we’re unsure about the series or number, the search will be wrong
+  if (read.confidence < 0.5) {
+    return { comic: null, candidates: [], read: readOut, note: ‘Could not read the comic clearly — try a better photo.’ };
+  }
 
   const q =
     read.format === 'collected_edition' && read.volume_number != null
@@ -256,7 +261,7 @@ async function scanCover(image: string) {
   }
 
   const top = res.top.comic;
-  if (top.format !== 'issue') return { comic: top, candidates: others, read: readOut, confidence: read.confidence };
+  if (top.format !== 'issue') return { comic: top, candidates: others, read: readOut, confidence: read.confidence, _debug: debug ? { read, q, top: top.title } : undefined };
 
   // every cover of that issue → which one is in the photo?
   const d = await cached(`comic:${top.id}`, 12 * HOUR, () => comicWithReviews(top.id, { title: top.title, seriesId: top.seriesId, series: top.series, publisher: top.publisher }));
@@ -264,8 +269,13 @@ async function scanCover(image: string) {
   const list = shortlist(all, [read.variant_hint, read.cover_artist].filter(Boolean).join(' '));
   let pick: Candidate = list[0];
   let confidence = read.confidence;
+  const dbg: Record<string, unknown> = { read, q, top: `${top.id} ${top.title} (${top.publisher})`, allCovers: all.length, shortlist: list.map((c) => c.name) };
   if (list.length > 1) {
-    const m = await matchCover(image, list).catch(() => null);
+    const m = await matchCover(image, list).catch((e) => {
+      dbg.matchError = String(e);
+      return null;
+    });
+    dbg.match = m;
     if (m?.index != null) {
       pick = list[m.index];
       confidence = Math.min(read.confidence, m.confidence);
@@ -282,6 +292,7 @@ async function scanCover(image: string) {
     confidence,
     candidates: others,
     read: readOut,
+    _debug: debug ? { ...dbg, pick: pick.name } : undefined,
   };
 }
 
