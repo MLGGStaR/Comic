@@ -7,6 +7,7 @@ export interface ParsedQuery {
   issue?: string;
   volume?: number;
   year?: number;
+  annual?: boolean; // "batman annual #2" → the annual inside the Batman run
   kind: 'issue' | 'collection' | 'series';
 }
 
@@ -24,6 +25,14 @@ export function normalize(raw: string): string {
 }
 
 export function parseQuery(raw: string): ParsedQuery {
+  const q = parseCore(raw);
+  // annuals live inside their series' run: search the series, flag the annual
+  const m = q.series.match(/^(.*?)\s+(?:(?:19|20)\d{2}\s+)?annual$/);
+  if (m && m[1] && q.kind === 'issue') return { ...q, series: m[1], annual: true };
+  return q;
+}
+
+function parseCore(raw: string): ParsedQuery {
   let s = normalize(raw);
   let year: number | undefined;
 

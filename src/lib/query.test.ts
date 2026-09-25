@@ -41,8 +41,9 @@ describe('parseQuery', () => {
     expect(parseQuery('absolute batman no. 4')).toEqual({ series: 'absolute batman', issue: '4', kind: 'issue' });
   });
 
-  test('annuals keep "annual" in the series title', () => {
-    expect(parseQuery('batman annual #2')).toEqual({ series: 'batman annual', issue: '2', kind: 'issue' });
+  test('annuals are flagged, and the series is searched without "annual"', () => {
+    expect(parseQuery('batman annual #2')).toEqual({ series: 'batman', issue: '2', annual: true, kind: 'issue' });
+    expect(parseQuery('absolute batman 2025 annual #1')).toEqual({ series: 'absolute batman', issue: '1', annual: true, kind: 'issue' });
   });
 
   test('odd issue numbers survive (#0, #1.MU, #½)', () => {

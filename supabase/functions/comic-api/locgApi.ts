@@ -13,6 +13,8 @@ import {
   decode,
   usDate,
   REPRINTERS,
+  pickIssue,
+  cleanCover,
   type Fmt,
   type IssueItem,
   type SeriesCard,
@@ -73,9 +75,8 @@ export interface SeriesHit {
   count?: number | null;
 }
 
-const seriesHit = (c: SeriesCard): SeriesHit => ({ id: c.id, title: c.title, publisher: c.publisher, years: c.years, cover: c.cover, count: c.count });
+const seriesHit = (c: SeriesCard): SeriesHit => ({ id: c.id, title: c.title, publisher: c.publisher, years: c.years, cover: cleanCover(c.cover), count: c.count });
 const isMain = (i: IssueItem) => !i.parentId;
-const sameNum = (a: string | null, b: string | undefined) => !!a && !!b && a.toLowerCase().replace(/^0+(?=\d)/, '') === b.toLowerCase().replace(/^0+(?=\d)/, '');
 
 export async function searchSeries(title: string): Promise<SeriesCard[]> {
   const j = await getComics(getComicsUrl({ list: 'search_series', list_option: 'series', view: 'thumbs', title, series_id: 0, user_id: 0 }));
@@ -97,7 +98,7 @@ const flat = (s: string) => normalize(s).replace(/^the\s+/, '').replace(/[^a-z0-
 
 /** Series search that retries spelling variants LoCG needs ("x-men 97" →
  *  "x-men '97") until some series title actually starts with what was typed. */
-async function seriesCards(title: string): Promise<SeriesCard[]> {
+export async function seriesCards(title: string): Promise<SeriesCard[]> {
   const want = flat(title);
   const tries = [title];
   const apos = title.replace(/(^|\s)(\d{2})(?=\s|$)/g, "$1'$2");
@@ -130,8 +131,15 @@ export async function search(q: string) {
   const seriesItself = { kind: 'series' as const, series: seriesHit(best) };
 
   if (p.kind === 'issue') {
-    const hit = await findIssue(best, p);
-    if (hit) return { top: { kind: 'comic' as const, comic: hit }, more: [seriesItself, ...others] };
+    // legacy numbering / relaunches: the number may live in the 2nd or 3rd
+    // best-matching run (e.g. #1000 of a book whose newest volume is #12)
+    for (const s of ranked.slice(0, 3)) {
+      const hit = await findIssue(s, p);
+      if (hit) {
+        const rest = ranked.filter((c) => c.id !== s.id).slice(0, 4).map((c) => ({ kind: 'series' as const, series: seriesHit(c) }));
+        return { top: { kind: 'comic' as const, comic: hit }, more: [{ kind: 'series' as const, series: seriesHit(s) }, ...rest] };
+      }
+    }
     return { top: seriesItself, more: others };
   }
   const cols = await findCollections(best, p);
@@ -148,14 +156,14 @@ function seriesResult(ranked: SeriesCard[]) {
   return { top: { kind: 'series' as const, series: seriesHit(ranked[0]) }, more: ranked.slice(1, 6).map((c) => ({ kind: 'series' as const, series: seriesHit(c) })) };
 }
 
-async function findIssue(best: SeriesCard, p: ParsedQuery): Promise<Lite | null> {
+export async function findIssue(best: SeriesCard, p: ParsedQuery): Promise<Lite | null> {
+  if (!p.issue) return null;
   const ctx = { seriesId: best.id, series: best.title, format: 'issue' as const };
-  const { items } = await inSeries(best.id, `${best.title} #${p.issue}`, [1, 6]);
-  let hit = items.filter(isMain).find((i) => sameNum(splitTitle(i.title).number, p.issue));
-  if (!hit) {
-    const all = await seriesItems(best.id, [1, 6]);
-    hit = all.items.filter(isMain).find((i) => sameNum(splitTitle(i.title).number, p.issue));
-  }
+  const fmts: Fmt[] = p.annual ? [6] : [1, 6];
+  const want = { issue: p.issue, annual: p.annual };
+  const { items } = await inSeries(best.id, p.annual ? `${best.title} annual #${p.issue}` : `${best.title} #${p.issue}`, fmts);
+  let hit = pickIssue(items, want);
+  if (!hit) hit = pickIssue((await seriesItems(best.id, fmts)).items, want);
   return hit ? toComicLite(hit, ctx) : null;
 }
 
@@ -307,21 +315,6 @@ export async function comic(id: string, hint: Hint) {
     }))
     .sort((a, b) => printRank(a.name) - printRank(b.name) || letter(a.name).localeCompare(letter(b.name)) || a.name.localeCompare(b.name));
 
-  // previous / next issue: two small in-series lookups (never the whole run)
-  let prev: Lite | null = null;
-  let next: Lite | null = null;
-  const n = t.number != null && /^\d+$/.test(t.number) ? Number(t.number) : null;
-  if (t.format === 'issue' && n != null) {
-    const ctx = { seriesId, series: seriesTitle, format: 'issue' as const };
-    const find = async (k: number) => {
-      if (k < 0) return null;
-      const r = await inSeries(seriesId!, `${seriesTitle} #${k}`, [1]).catch(() => null);
-      const hit = r?.items.filter(isMain).find((x) => sameNum(splitTitle(x.title).number, String(k)));
-      return hit ? toComicLite(hit, ctx) : null;
-    };
-    [prev, next] = await Promise.all([find(n - 1), find(n + 1)]);
-  }
-
   return {
     ...lite,
     cover: largeCover(main.cover),
@@ -338,10 +331,23 @@ export async function comic(id: string, hint: Hint) {
     ratingCount: null,
     criticScore: null,
     criticCount: null,
-    prev,
-    next,
     url: `https://leagueofcomicgeeks.com/comic/${main.id}`,
   };
+}
+
+/** Previous / next issue: two small in-series lookups (never the whole run). */
+export async function neighbors(seriesId: string, seriesTitle: string, number: string): Promise<{ prev: Lite | null; next: Lite | null }> {
+  const n = /^\d+$/.test(number) ? Number(number) : null;
+  if (n == null) return { prev: null, next: null };
+  const ctx = { seriesId, series: seriesTitle, format: 'issue' as const };
+  const find = async (k: number) => {
+    if (k < 0) return null;
+    const r = await inSeries(seriesId, `${seriesTitle} #${k}`, [1]).catch(() => null);
+    const hit = r ? pickIssue(r.items, { issue: String(k) }) : null;
+    return hit ? toComicLite(hit, ctx) : null;
+  };
+  const [prev, next] = await Promise.all([find(n - 1), find(n + 1)]);
+  return { prev, next };
 }
 
 // ── barcode ─────────────────────────────────────────────────────────────

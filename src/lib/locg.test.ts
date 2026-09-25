@@ -10,6 +10,8 @@ import {
   rankSeries,
   largeCover,
   mediumCover,
+  pickIssue,
+  cleanCover,
 } from '../../supabase/functions/_shared/locg.ts';
 import { parseQuery } from './query';
 
@@ -91,7 +93,34 @@ describe('toComicLite', () => {
   });
 });
 
+describe('pickIssue', () => {
+  const item = (id: string, title: string, parentId: string | null = null) =>
+    ({ id, title, parentId, variantName: null, releaseDate: null, price: null, pulls: null, community: null, potw: null, publisher: 'DC Comics', cover: null, href: null, description: null, sku: null, foc: null, variantCount: null }) as const;
+  const items = [
+    item('a1', 'Absolute Batman 2025 Annual #1'),
+    item('v1', 'Absolute Batman #1', 'm1'),
+    item('m10', 'Absolute Batman #10'),
+    item('m1', 'Absolute Batman #1'),
+  ];
+
+  test('a regular issue number never resolves to the annual', () => {
+    expect(pickIssue([...items], { issue: '1' })?.id).toBe('m1');
+  });
+  test('an annual query picks the annual', () => {
+    expect(pickIssue([...items], { issue: '1', annual: true })?.id).toBe('a1');
+  });
+  test('variants and near-miss numbers never match', () => {
+    expect(pickIssue([item('v1', 'Absolute Batman #1', 'm1')], { issue: '1' })).toBeNull();
+    expect(pickIssue([item('m10', 'Absolute Batman #10')], { issue: '1' })).toBeNull();
+  });
+});
+
 describe('cover sizes', () => {
+  test('LoCG "no cover" placeholders become null', () => {
+    expect(cleanCover('/assets/images/no-cover-medium.jpg?2')).toBeNull();
+    expect(cleanCover('https://s3.amazonaws.com/comicgeeks/comics/covers/medium-1.jpg')).toBe('https://s3.amazonaws.com/comicgeeks/comics/covers/medium-1.jpg');
+  });
+
   test('swap between medium and large', () => {
     const m = 'https://s3.amazonaws.com/comicgeeks/comics/covers/medium-8081353.jpg?1744681047';
     expect(largeCover(m)).toBe('https://s3.amazonaws.com/comicgeeks/comics/covers/large-8081353.jpg?1744681047');

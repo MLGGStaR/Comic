@@ -65,6 +65,26 @@ export async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>
   }
 }
 
+export interface CustomCover {
+  id: string;
+  comic_id: string;
+  name: string;
+  image_url: string;
+  created_by: string;
+}
+
+/** Community cover photos (covers the catalogue doesn't have) for these comics. */
+export async function customCoversFor(comicIds: string[]): Promise<CustomCover[]> {
+  if (!comicIds.length) return [];
+  const list = comicIds.map((id) => `"${id.replace(/["\\]/g, '')}"`).join(',');
+  try {
+    const r = await fetch(`${URL_}/rest/v1/comic_custom_covers?select=id,comic_id,name,image_url,created_by&comic_id=in.(${encodeURIComponent(list)})&order=created_at`, { headers: H });
+    return r.ok ? ((await r.json()) as CustomCover[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function upcGet(code: string) {
   const r = await fetch(`${URL_}/rest/v1/comic_upc?select=*&code=eq.${encodeURIComponent(code)}`, { headers: H });
   if (!r.ok) return null;

@@ -84,7 +84,7 @@ export function parseIssueItems(html: string): IssueItem[] {
       community: num(g(/data-community="(\d*)"/)),
       potw: num(g(/data-potw="(\d*)"/)),
       publisher: decode(g(/class="publisher color-offset">([^<]*)</)) || null,
-      cover: g(/data-src="([^"]+)"/) ?? null,
+      cover: cleanCover(g(/data-src="([^"]+)"/)),
       href: g(/<a href="(\/comic\/[^"]+)"/) ?? null,
       description: desc ? decode(stripTags(desc)).replace(/\s*(?:\.\.\.|…)\s*$/, '…') || null : null,
       sku: decode(g(/comic-diamond-sku">([^<]*)</)) || null,
@@ -147,6 +147,19 @@ export function splitTitle(title: string) {
   const iss = t.match(/^(.*?)\s+#\s*(\S+)/);
   if (iss) return { series: iss[1].trim(), number: iss[2], format: 'issue' as const, formatLabel: null, volume: null };
   return { series: t, number: null, format: 'issue' as const, formatLabel: null, volume: null };
+}
+
+/** LoCG serves "/assets/images/no-cover-*.jpg" when it has no art: treat as none. */
+export const cleanCover = (u: string | null | undefined): string | null => (u && /^https?:\/\//.test(u) && !/no-cover/.test(u) ? u : null);
+
+const sameNumber = (a: string | null, b: string) => !!a && a.toLowerCase().replace(/^0+(?=\d)/, '') === b.toLowerCase().replace(/^0+(?=\d)/, '');
+
+/** The main-cover issue with exactly this number; annuals only when asked for. */
+export function pickIssue(items: IssueItem[], want: { issue: string; annual?: boolean }): IssueItem | null {
+  const mains = items.filter((i) => !i.parentId && sameNumber(splitTitle(i.title).number, want.issue));
+  const isAnnual = (i: IssueItem) => /\bannual\b/i.test(i.title);
+  const pool = mains.filter((i) => isAnnual(i) === !!want.annual);
+  return pool[0] ?? null;
 }
 
 export const largeCover = (u: string | null) => (u ? u.replace(/\/(?:small|medium|large)-(\d+)/, '/large-$1') : null);
