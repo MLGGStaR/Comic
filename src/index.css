@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation; /* no double-tap zoom — app, not a website */
+    /* long-press must never show the copy/lookup bubble (inputs re-enable it) */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  * {
+    scrollbar-width: none;
+  }
+  *::-webkit-scrollbar {
+    display: none;
+  }
+  input,
+  textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  /* iOS zooms the page when a focused input renders under 16px */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  button {
+    transition: transform 120ms ease, opacity 120ms ease;
+  }
+  button:active {
+    transform: scale(0.96);
+  }
+  button,
+  a,
+  select,
+  label,
+  img {
+    -webkit-touch-callout: none;
+  }
+  img {
+    -webkit-user-drag: none;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-bg-1 border border-white/[0.06] rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,0.25)];
+  }
+  .chip {
+    @apply inline-flex items-center px-2 py-1 rounded-md text-xs;
+  }
+  .btn-primary {
+    @apply px-4 py-2.5 rounded-xl font-semibold text-sm text-bg-0;
+    background: linear-gradient(135deg, #00d735 0%, #2fc7a0 100%);
+  }
+  .btn-secondary {
+    @apply px-4 py-2.5 rounded-xl font-semibold text-sm text-bg-0;
+    background: linear-gradient(135deg, #6fd0ff 0%, #40bcf4 100%);
+  }
+  /* covers respond to touch: a subtle press, app-wide, one rule */
+  .cover {
+    transition: transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  a:active .cover,
+  button:active .cover,
+  .press:active .cover {
+    transform: scale(0.96);
+  }
+  /* sections settle in one after another when a tab opens */
+  .tab-in section {
+    animation: tab-in 260ms ease-out both;
+  }
+  .tab-in section:nth-of-type(2) {
+    animation-delay: 45ms;
+  }
+  .tab-in section:nth-of-type(3) {
+    animation-delay: 90ms;
+  }
+  .tab-in section:nth-of-type(4) {
+    animation-delay: 135ms;
+  }
+  .tab-in section:nth-of-type(5) {
+    animation-delay: 180ms;
+  }
+  .tab-in section:nth-of-type(n + 6) {
+    animation-delay: 220ms;
+  }
+  @keyframes tab-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .tab-in {
+    animation: tab-in 180ms ease-out;
+  }
+  @keyframes sheet-up {
+    from {
+      transform: translateY(100%);
+    }
+  }
+  .sheet-up {
+    animation: sheet-up 260ms cubic-bezier(0.32, 0.72, 0.28, 1);
+  }
+  /* pushed pages slide in from the right, iOS-style */
+  @keyframes screen-in {
+    from {
+      transform: translateX(100%);
+    }
+  }
+  .screen-in {
+    animation: screen-in 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  .fade-in {
+    animation: fade-in 200ms ease-out;
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.94);
+    }
+  }
+  .pop-in {
+    animation: pop-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab-in,
+    .tab-in section,
+    .sheet-up,
+    .screen-in,
+    .fade-in,
+    .pop-in,
+    .cover {
+      animation: none;
+      transition: none;
+    }
+  }
+  /* rating stars: brand gradient, always on the page background (never on covers) */
+  .stars {
+    @apply text-[13px] font-bold leading-tight;
+    background: linear-gradient(90deg, #00d735 0%, #40bcf4 55%, #ff8000 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .skeleton {
+    @apply bg-bg-2 animate-pulse;
+  }
+}
