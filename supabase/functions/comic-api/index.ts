@@ -10,7 +10,7 @@
 // Everything is normalised into the app's ComicLite / ComicDetail shapes and
 // cached in comic_cache so the sources see as few requests as possible.
 import { cached, cacheGet, cachePut, cacheGetMany, cachePutMany, customCoversFor, upcGet, upcPut } from '../_shared/cache.ts';
-import { readCover, coarseRank, fineMatch, byHints, classifyGenres, type Candidate, type CoverRead } from './scan.ts';
+import { readCover, coarseRank, fineMatch, byHints, classifyGenres, DEFAULT_KNOBS, MODELS, type Candidate, type CoverRead, type Model, type ScanKnobs } from './scan.ts';
 import { decodeBarcode } from '../_shared/barcode.ts';
 import { normalize, parseQuery, type ParsedQuery } from '../_shared/query.ts';
 import { splitTitle, rankSeries } from '../_shared/locg.ts';
@@ -83,10 +83,10 @@ Deno.serve(async (req) => {
         const uid = userId(req);
         if (!uid) return json({ error: 'Log in to scan covers' }, 401);
         if (!(await allowScan(uid))) return json({ error: 'Scan limit reached — try again in a bit' }, 429);
-        const body = (await req.json().catch(() => ({}))) as { image?: string; upc?: string; debug?: boolean };
+        const body = (await req.json().catch(() => ({}))) as { image?: string; upc?: string; debug?: boolean; knobs?: Partial<ScanKnobs> };
         if (!body.image || body.image.length < 1000) return json({ error: 'No photo' }, 400);
         if (body.image.length > 7_000_000) return json({ error: 'Photo too large' }, 413);
-        return json(await scanCover(body.image, { debug: !!body.debug, upc: body.upc ?? null }));
+        return json(await scanCover(body.image, { debug: !!body.debug, upc: body.upc ?? null, knobs: body.debug ? knobsFrom(body.knobs) : DEFAULT_KNOBS }));
       }
       default:
         return json({ error: `unknown op "${op}"` }, 400);
@@ -133,7 +133,7 @@ async function buildExtras(id: string, h: locg.Hint) {
   if (t.format !== 'issue' || !h.seriesId || !t.number) return {};
   const series = h.series ?? t.series;
   const [cb, nb] = await Promise.all([
-    cbrLookup(id, h.seriesId, h.publisher, series, t.number).catch(() => null),
+    cbrLookup(id, h.seriesId, h.publisher ?? null, series ?? null, t.number).catch(() => null),
     locg.neighbors(h.seriesId, series, t.number).catch(() => ({ prev: null, next: null })),
   ]);
   const out: Record<string, unknown> = { prev: nb.prev, next: nb.next };
@@ -272,18 +272,43 @@ function readSummary(read: CoverRead) {
   };
 }
 
-async function scanCover(image: string, opts: { debug: boolean; upc: string | null }): Promise<ScanResult> {
-  const dbg: Record<string, unknown> = {};
+/** Debug-only overrides for experiments (models from the allow-list only). */
+function knobsFrom(k: Partial<ScanKnobs> | undefined): ScanKnobs {
+  const model = (m: unknown, d: Model): Model => (MODELS.includes(m as Model) ? (m as Model) : d);
+  return {
+    readModel: model(k?.readModel, DEFAULT_KNOBS.readModel),
+    coarseModel: model(k?.coarseModel, DEFAULT_KNOBS.coarseModel),
+    fineModel: model(k?.fineModel, DEFAULT_KNOBS.fineModel),
+    inline: typeof k?.inline === 'boolean' ? k.inline : DEFAULT_KNOBS.inline,
+    chunk: typeof k?.chunk === 'number' && k.chunk >= 8 && k.chunk <= 100 ? Math.round(k.chunk) : DEFAULT_KNOBS.chunk,
+    rerankOver: typeof k?.rerankOver === 'number' && k.rerankOver >= 3 && k.rerankOver <= 12 ? Math.round(k.rerankOver) : DEFAULT_KNOBS.rerankOver,
+  };
+}
+
+const mainOf = async (issue: Lite): Promise<Cand> => (await coversOf(issue))[0];
+
+async function scanCover(image: string, opts: { debug: boolean; upc: string | null; knobs: ScanKnobs }): Promise<ScanResult> {
+  const knobs = opts.knobs;
+  const dbg: Record<string, unknown> = { knobs };
+  const ms: Record<string, number> = {};
+  dbg.ms = ms;
+  let t = Date.now();
+  const lap = (k: string) => {
+    ms[k] = Date.now() - t;
+    t = Date.now();
+  };
   const out = (r: ScanResult): ScanResult => (opts.debug ? { ...r, _debug: dbg } : r);
 
   // 0) a barcode the phone decoded from this photo → exact, no AI needed
   if (opts.upc) {
     dbg.phoneBarcode = opts.upc;
     const r = await lookupCode(opts.upc).catch(() => null);
+    lap('phoneBarcode');
     if (r?.comic) return out({ ...r, via: 'barcode', confidence: 1, matched: true });
   }
 
-  const read = await readCover(image);
+  const read = await readCover(image, knobs.readModel);
+  lap('read');
   dbg.read = read;
   const readOut = readSummary(read);
   if (!read.is_comic || !read.series) return out({ comic: null, candidates: [], read: readOut, note: 'That doesn’t look like a comic cover' });
@@ -294,22 +319,28 @@ async function scanCover(image: string, opts: { debug: boolean; upc: string | nu
     dbg.coverBarcode = bc;
     if (bc && (bc.kind === 'isbn' || bc.addon)) {
       const r = await lookupCode(read.barcode_digits).catch(() => null);
+      lap('coverBarcode');
       if (r?.comic) return out({ ...r, via: 'barcode', confidence: 0.97, matched: true, read: readOut });
     }
   }
 
   // 2) collected editions
   if (read.format === 'collected_edition' || (!read.issue_number && (read.volume_number != null || !!read.subtitle))) {
-    const t = await scanTrade(read);
-    if (t) return out({ ...t, read: readOut });
+    const tr = await scanTrade(read);
+    lap('trade');
+    if (tr) return out({ ...tr, read: readOut });
   }
 
-  // 3) which issue: the number in the best-matching runs (annuals only when printed)
-  const p: ParsedQuery = { ...parseQuery(`${read.series} #${read.issue_number ?? ''}`), annual: read.annual || undefined, year: read.year ?? undefined };
+  // 3) which issue: the printed number (or, on a virgin/sketch cover, the
+  //    reader's best guess) in the best-matching runs; annuals only when printed
+  const guess = !read.issue_number && read.likely_issue ? parseQuery(read.likely_issue) : null;
+  const number = read.issue_number ?? (guess?.kind === 'issue' ? guess.issue : null);
+  const seriesName = !read.issue_number && guess?.kind === 'issue' ? guess.series : read.series;
+  const p: ParsedQuery = { ...parseQuery(`${seriesName} #${number ?? ''}`), annual: read.annual || undefined, year: read.year ?? undefined };
   const cards = rankSeries(await cached(`scards:${normalize(p.series)}`, 6 * HOUR, () => locg.seriesCards(p.series)), p);
   dbg.series = cards.slice(0, 4).map((c) => `${c.id} ${c.title} (${c.publisher}, ${c.years})`);
   const issues: Lite[] = [];
-  if (read.issue_number) {
+  if (number) {
     for (const s of cards.slice(0, 4)) {
       const hit = await cached(`issue:${s.id}:${p.annual ? 'a' : ''}${p.issue}`, 12 * HOUR, async () => (await locg.findIssue(s, p)) ?? { none: true as const });
       if (!('none' in hit)) issues.push(hit);
@@ -318,7 +349,6 @@ async function scanCover(image: string, opts: { debug: boolean; upc: string | nu
   }
   dbg.issues = issues.map((i) => `${i.id} ${i.title} (${i.publisher})`);
 
-  // no number printed / not found: the run's covers are the candidates
   let cands: Cand[];
   const primary = issues[0] ?? null;
   if (primary) {
@@ -326,82 +356,99 @@ async function scanCover(image: string, opts: { debug: boolean; upc: string | nu
     const near = await runMains(primary, 4);
     cands = [...own, ...near];
   } else {
+    // no number: the run's recent main covers, plus every cover of its newest
+    // issues (store-exclusive virgin covers are usually of recent books)
     const best = cards[0];
     if (!best) return out({ comic: null, candidates: [], read: readOut, note: 'Couldn’t find that series' });
     const s = await cached(`series2:${best.id}`, 12 * HOUR, () => locg.series(best.id));
-    cands = s.issues
-      .filter((i) => i.cover)
-      .slice(-80)
-      .reverse()
-      .map((i) => ({ id: i.id, issueId: i.id, lite: i, name: `${i.title} — Main cover`, cover: i.cover, main: true, variantName: null }));
+    const recent = s.issues.filter((i) => i.cover).slice(-60).reverse();
+    const newest = await Promise.all(recent.slice(0, 3).map((i) => coversOf(i).catch(() => [] as Cand[])));
+    const seen = new Set<string>();
+    cands = [...newest.flat(), ...recent.map((i) => ({ id: i.id, issueId: i.id, lite: i, name: `${i.title} — Main cover`, cover: i.cover, main: true, variantName: null }))].filter(
+      (c) => !seen.has(c.id) && !!seen.add(c.id),
+    );
   }
   const withArt = cands.filter((c) => c.cover);
   dbg.candidates = withArt.length;
+  lap('candidates');
 
   // 4) coarse: every candidate as a thumbnail → top 3
   let top: Cand[] = [];
   if (withArt.length <= 3) top = withArt;
   else {
-    const rounds = await Promise.all(chunk(withArt, 80).map((ch) => coarseRank(image, ch).catch((e) => ({ ranked: [] as Candidate[], reason: String(e) }))));
+    // split evenly: 61 candidates at chunk 60 → two calls of 31/30, not 60 + 1
+    const parts = Math.ceil(withArt.length / knobs.chunk);
+    const size = Math.ceil(withArt.length / parts);
+    const rounds = await Promise.all(chunk(withArt, size).map((ch) => coarseRank(image, ch, knobs).catch((e) => ({ ranked: [] as Candidate[], reason: String(e) }))));
     dbg.coarse = rounds.map((r) => ({ ranked: r.ranked.map((c) => c.name), reason: r.reason }));
     top = rounds.flatMap((r) => r.ranked) as Cand[];
-    if (top.length > 3) {
-      const again = await coarseRank(image, top).catch(() => null);
+    if (top.length > knobs.rerankOver) {
+      const again = await coarseRank(image, top, knobs).catch(() => null);
       top = (again?.ranked.length ? again.ranked : top.slice(0, 3)) as Cand[];
     }
   }
+  lap('coarse');
 
   // 5) nothing looked right: widen to the rest of the run before giving up
   if (!top.length && primary) {
     const wide = await runMains(primary, 80);
     if (wide.length) {
-      const r = await coarseRank(image, wide).catch(() => null);
+      const r = await coarseRank(image, wide, knobs).catch(() => null);
       dbg.wide = r && { ranked: r.ranked.map((c) => c.name), reason: r.reason };
       if (r?.ranked.length) {
         // the photo is another issue of the run: bring in that issue's variants too
         const hitIssue = (r.ranked[0] as Cand).lite;
         const theirs = await coversOf(hitIssue);
-        const again = theirs.length > 3 ? await coarseRank(image, theirs).catch(() => null) : { ranked: theirs, reason: '' };
+        const again = theirs.length > 3 ? await coarseRank(image, theirs, knobs).catch(() => null) : { ranked: theirs, reason: '' };
         top = ((again?.ranked.length ? again.ranked : r.ranked) as Cand[]).slice(0, 3);
       }
     }
+    lap('wide');
   }
 
-  // 6) fine: the top picks at full size → the exact cover
   if (!top.length) {
+    // a printed number pins the issue even when this exact cover isn't listed;
+    // a guessed one (virgin covers) doesn't — never show a guess as the answer
+    const sure = read.issue_number ? primary : null;
     return out({
-      comic: primary,
+      comic: sure,
       matched: false,
       confidence: 0.2,
-      note: primary ? 'This cover isn’t in the catalogue yet' : 'Couldn’t match this cover',
+      note: sure ? 'This cover isn’t in the catalogue yet' : 'Couldn’t match this cover',
       alternatives: [],
-      candidates: issues.slice(1),
+      candidates: sure ? issues.slice(1) : issues,
       read: readOut,
       via: 'cover',
     });
   }
-  const f = await fineMatch(image, top).catch((e) => ({ pick: null, confidence: 0, reason: String(e) }));
-  dbg.fine = { pick: f.pick?.name ?? null, confidence: f.confidence, reason: f.reason };
-  let pick = f.pick as Cand | null;
+
+  // 6) fine: the top picks at full size → the exact cover. Reprints and foils
+  //    share the main art, so the main cover of the likeliest issue always competes.
+  const lead = top[0] as Cand;
+  const leadMain = lead.main ? lead : await mainOf(lead.lite).catch(() => null);
+  const finalists = leadMain && !top.some((c) => c.id === leadMain.id) ? [...top, leadMain] : top;
+  const f = await fineMatch(image, finalists, knobs).catch((e) => ({ pick: null, confidence: 0, reason: String(e) }));
+  lap('fine');
+  dbg.fine = { finalists: finalists.map((c) => c.name), pick: f.pick?.name ?? null, confidence: f.confidence, reason: f.reason };
+  let chosen = f.pick as Cand | null;
   let confidence = f.confidence;
-  let matched = !!pick && f.confidence >= 0.5;
+  let matched = !!chosen && f.confidence >= 0.5;
   if (!matched) {
     // unsure between covers that share the art: the main cover of the likeliest issue
-    pick = (top.find((c) => c.main && c.issueId === (top[0] as Cand).issueId) ?? top[0]) as Cand;
+    chosen = (leadMain ?? lead) as Cand;
     confidence = Math.min(0.45, f.confidence || 0.35);
-    matched = false;
   }
-  const chosen = pick!;
+  const pick = chosen!;
   return out({
-    comic: chosen.lite,
-    variantId: chosen.main ? null : chosen.id,
-    variantCover: chosen.main ? null : chosen.cover,
-    note: chosen.main ? null : chosen.variantName,
+    comic: pick.lite,
+    variantId: pick.main ? null : pick.id,
+    variantCover: pick.main ? null : pick.cover,
+    note: pick.main ? null : pick.variantName,
     confidence,
     matched,
     via: 'cover',
-    alternatives: top.filter((c) => c.id !== chosen.id).map((c) => altOf(c as Cand)),
-    candidates: issues.filter((i) => i.id !== chosen.issueId),
+    alternatives: finalists.filter((c) => c.id !== pick.id).map((c) => altOf(c as Cand)),
+    candidates: issues.filter((i) => i.id !== pick.issueId),
     read: readOut,
   });
 }

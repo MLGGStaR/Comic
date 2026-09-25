@@ -3,11 +3,19 @@
 // an IndexedDB layer: cached answers render instantly, then refresh.
 import { useEffect, useRef, useState } from 'react';
 import { SUPABASE_ANON, SUPABASE_URL, supabase } from '../supabase';
-import { idbGet, idbSet } from '../lib/idb';
+import { idbDel, idbGet, idbSet } from '../lib/idb';
 import type { ComicDetail, ComicLite, SearchResult, SeriesDetail } from '../types';
 
 const FN = `${SUPABASE_URL}/functions/v1/comic-api`;
 const HOUR = 3600e3;
+
+/** Another cover the scanner thought could be it. */
+export interface ScanAlt {
+  comic: ComicLite;
+  variantId: string | null;
+  variantCover: string | null;
+  note: string | null;
+}
 
 export interface UpcMatch {
   comic: ComicLite | null; // the issue (main listing)
@@ -15,8 +23,14 @@ export interface UpcMatch {
   variantCover?: string | null;
   note?: string | null; // variant name, e.g. "Cover B Jim Lee Variant"
   confidence?: number | null; // 0–1 (cover scans)
-  candidates: ComicLite[];
+  matched?: boolean; // cover scans: false = a best guess to check
+  via?: 'barcode' | 'cover';
+  alternatives?: ScanAlt[]; // other covers that looked close
+  candidates: ComicLite[]; // other issues it could be
 }
+
+/** Reviews, scores, credits and previous / next issue (slower sources). */
+export type ComicExtras = Partial<Pick<ComicDetail, 'prev' | 'next' | 'creators' | 'criticScore' | 'criticCount' | 'userScore' | 'userCount' | 'rating' | 'ratingCount' | 'reviewsUrl' | 'reviews'>>;
 
 async function authHeader(): Promise<string> {
   const { data } = await supabase.auth.getSession();
@@ -48,7 +62,19 @@ async function fetchJson<T>(op: string, params: Record<string, string>, init?: R
 type Cached<T> = { t: number; data: T };
 // comic lookups carry hints (title, series) that shouldn't split the cache
 const cacheKey = (op: string, params: Record<string, string>) =>
-  op === 'comic' ? `api:comic:${params.id}` : `api:${op}:${JSON.stringify(params)}`;
+  op === 'comic' || op === 'extras' ? `api:${op}:${params.id}` : `api:${op}:${JSON.stringify(params)}`;
+
+// one network request per key at a time (a prefetch and the page asking together)
+const inflight = new Map<string, Promise<unknown>>();
+function fetchShared<T>(op: string, params: Record<string, string>): Promise<T> {
+  const key = cacheKey(op, params);
+  let p = inflight.get(key) as Promise<T> | undefined;
+  if (!p) {
+    p = fetchJson<T>(op, params).finally(() => inflight.delete(key));
+    inflight.set(key, p);
+  }
+  return p;
+}
 
 export function comicParams(c: { id: string; title?: string | null; seriesId?: string | null; series?: string | null; publisher?: string | null }) {
   const p: Record<string, string> = { id: c.id };
@@ -65,7 +91,7 @@ async function cachedCall<T>(op: string, params: Record<string, string>, ttl: nu
   const hit = await idbGet<Cached<T>>(key);
   if (hit && Date.now() - hit.t < ttl) return hit.data;
   try {
-    const data = await fetchJson<T>(op, params);
+    const data = await fetchShared<T>(op, params);
     void idbSet(key, { t: Date.now(), data });
     return data;
   } catch (e) {
@@ -80,7 +106,7 @@ async function swr<T>(op: string, params: Record<string, string>, ttl: number, o
   const hit = await idbGet<Cached<T>>(key);
   if (hit) onData(hit.data, Date.now() - hit.t < ttl);
   if (hit && Date.now() - hit.t < ttl) return;
-  const data = await fetchJson<T>(op, params);
+  const data = await fetchShared<T>(op, params);
   void idbSet(key, { t: Date.now(), data });
   onData(data, true);
 }
@@ -94,18 +120,22 @@ function weekTtl(date: string): number {
 
 export const api = {
   search: (q: string) => cachedCall<SearchResult>('search', { q: q.trim().toLowerCase() }, 6 * HOUR),
-  comic: (c: ComicLite) => cachedCall<ComicDetail>('comic', comicParams(c), 12 * HOUR),
+  comic: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicDetail>('comic', comicParams(c), 12 * HOUR),
+  extras: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicExtras>('extras', comicParams(c), 12 * HOUR),
   series: (id: string) => cachedCall<SeriesDetail>('series', { id }, 6 * HOUR),
   week: (date: string) => cachedCall<ComicLite[]>('week', { date }, weekTtl(date)),
   upc: (code: string) => cachedCall<UpcMatch>('upc', { code }, 24 * HOUR),
+  /** Drop a comic's cached detail (after adding a cover to it). */
+  forgetComic: (id: string) => idbDel(`api:comic:${id}`),
   swr,
   weekTtl,
-  /** Identify a comic from a photo of its cover (server calls Claude vision). */
-  scan: (imageBase64: string, hint?: string) =>
+  /** Identify a comic from a photo of its cover (server calls Claude vision);
+   *  `upc` = a barcode the phone already decoded from the same photo. */
+  scan: (imageBase64: string, upc?: string | null) =>
     fetchJson<UpcMatch & { read?: { series?: string; issue?: string; publisher?: string; variant?: string } }>(
       'scan',
       {},
-      { method: 'POST', body: JSON.stringify({ image: imageBase64, hint }), headers: { 'Content-Type': 'application/json' } },
+      { method: 'POST', body: JSON.stringify({ image: imageBase64, upc: upc ?? undefined }), headers: { 'Content-Type': 'application/json' } },
     ),
 };
 

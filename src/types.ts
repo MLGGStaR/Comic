@@ -22,11 +22,13 @@ export interface ComicLite {
 }
 
 export interface Variant {
-  id: string;
+  id: string; // catalogue id, or "custom:<uuid>" for a collector's photo
   name: string; // "Cover B Jim Lee Card Stock Variant"
   cover: string | null;
   price?: number | null;
   ratio?: string | null; // "1:25"
+  custom?: boolean; // a cover the catalogue doesn't have, added from a photo
+  by?: string | null; // who added it (custom covers)
 }
 
 export interface Creator {
@@ -91,7 +93,7 @@ export interface Entry {
   rating: number | null;
   readAt: string | null; // YYYY-MM-DD
   review: string | null;
-  variants: OwnedVariant[]; // specific covers owned (empty + owned = main cover)
+  variants: OwnedVariant[]; // the covers owned; empty + owned = cover not picked yet
   paid: number | null; // what you paid, total
   value: number | null; // your own value override
   est: number | null; // latest market estimate for the copies you own
@@ -101,9 +103,10 @@ export interface Entry {
 }
 
 export interface OwnedVariant {
-  id: string;
+  id: string; // the comic's own id = main cover; variant id; "custom:<uuid>"
   name: string;
   cover: string | null;
+  price?: number | null; // that cover's cover price, when known
 }
 
 export interface SearchResult {

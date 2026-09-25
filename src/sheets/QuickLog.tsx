@@ -1,5 +1,6 @@
-// Hold any cover → this sheet. Have it / Read / Wishlist toggle instantly;
-// the rating (drag the stars) saves a moment after you let go.
+// Hold any cover → this sheet. Have it / Read / Wishlist toggle instantly
+// (owning it asks which cover); the rating (drag the stars) saves a moment
+// after you let go.
 import { useEffect, useRef, useState } from 'react';
 import type { ComicLite } from '../types';
 import { Sheet } from '../ui/Sheet';
@@ -7,6 +8,7 @@ import { Cover } from '../ui/Cover';
 import { StarPicker } from '../ui/Stars';
 import { collection, useEntry } from '../state/collection';
 import { StatusToggles } from '../ui/StatusToggles';
+import { CoverPicker } from '../ui/CoverPicker';
 import { isoDay } from '../lib/entry';
 import { fmtDate } from '../lib/format';
 
@@ -51,6 +53,7 @@ export function QuickLogSheet({ comic, onClose }: { comic: ComicLite; onClose: (
       </div>
 
       <StatusToggles comic={comic} />
+      <CoverPicker comic={comic} className="mt-3" />
 
       <div className="mt-4 rounded-2xl bg-bg-0/40 py-2">
         <StarPicker value={rating} onChange={onRate} />

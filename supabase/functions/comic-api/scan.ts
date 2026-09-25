@@ -7,7 +7,30 @@
 import Anthropic from 'npm:@anthropic-ai/sdk@0.128.0';
 import { largeCover, mediumCover } from '../_shared/locg.ts';
 
-const MODEL = 'claude-opus-5';
+export const MODELS = ['claude-opus-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'] as const;
+export type Model = (typeof MODELS)[number];
+
+/** Per-pass settings; the defaults are what production uses. */
+export interface ScanKnobs {
+  readModel: Model;
+  coarseModel: Model;
+  fineModel: Model;
+  /** fetch catalogue covers here (in parallel) and send them inline, instead of as URLs */
+  inline: boolean;
+  /** thumbnails per coarse call; bigger candidate sets are split into parallel calls */
+  chunk: number;
+  /** re-rank the chunks' picks only when there are more than this many (else they all go to fine) */
+  rerankOver: number;
+}
+export const DEFAULT_KNOBS: ScanKnobs = {
+  readModel: 'claude-opus-5',
+  coarseModel: 'claude-opus-5',
+  fineModel: 'claude-opus-5-5',
+  inline: true,
+  chunk: 24,
+  rerankOver: 8,
+};
+
 let client: Anthropic | null = null;
 const anthropic = () => (client ??= new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY') }));
 
@@ -18,6 +41,7 @@ export interface CoverRead {
   format: 'issue' | 'collected_edition' | 'unknown';
   series: string | null;
   issue_number: string | null;
+  likely_issue: string | null;
   annual: boolean;
   volume_number: number | null;
   subtitle: string | null;
@@ -32,12 +56,17 @@ export interface CoverRead {
 const READ_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['is_comic', 'format', 'series', 'issue_number', 'annual', 'volume_number', 'subtitle', 'publisher', 'year', 'barcode_digits', 'variant_hint', 'cover_artist', 'confidence'],
+  required: ['is_comic', 'format', 'series', 'issue_number', 'likely_issue', 'annual', 'volume_number', 'subtitle', 'publisher', 'year', 'barcode_digits', 'variant_hint', 'cover_artist', 'confidence'],
   properties: {
     is_comic: { type: 'boolean', description: 'true if the photo shows the front cover of a comic book, trade paperback or graphic novel' },
     format: { type: 'string', enum: ['issue', 'collected_edition', 'unknown'] },
     series: { ...nullable('string'), description: 'Series title as catalogues list it, without the issue number or the word "Annual", e.g. "Absolute Batman", "Amazing Spider-Man"' },
-    issue_number: { ...nullable('string'), description: 'Issue number from the issue box / trade dress, e.g. "2", "1000". Null if not printed.' },
+    issue_number: { ...nullable('string'), description: 'Issue number PRINTED on the cover (issue box / trade dress), e.g. "2", "1000". Null if not printed.' },
+    likely_issue: {
+      ...nullable('string'),
+      description:
+        'Only when no issue number is printed (virgin, sketch, blank-style covers): the issue you believe this artwork belongs to, from your knowledge of variant covers, as "<series> #<number>", e.g. "Amazing Spider-Man #1000". Null if you do not know.',
+    },
     annual: { type: 'boolean', description: 'true if the cover says Annual' },
     volume_number: { ...nullable('integer'), description: 'For collected editions: the Vol. number' },
     subtitle: { ...nullable('string'), description: 'Story/collection subtitle if printed, e.g. "The Zoo"' },
@@ -53,13 +82,13 @@ const READ_SCHEMA = {
   },
 } as const;
 
-async function structured<T>(system: string, content: unknown[], schema: object): Promise<T> {
+async function structured<T>(model: Model, system: string, content: unknown[], schema: object): Promise<T> {
   const params = {
-    model: MODEL,
+    model,
     max_tokens: 8000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: 'low', format: { type: 'json_schema', schema } },
+    output_config: model.startsWith('claude-haiku') ? { format: { type: 'json_schema', schema } } : { effort: 'low', format: { type: 'json_schema', schema } },
     system,
     messages: [{ role: 'user', content }],
   };
@@ -72,8 +101,35 @@ async function structured<T>(system: string, content: unknown[], schema: object)
 
 const photoBlock = (b64: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } });
 
-export function readCover(imageBase64: string): Promise<CoverRead> {
+function toB64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** Image blocks for many URLs: fetched here in parallel (inline) or left to the API (url). */
+async function imageBlocks(urls: string[], inline: boolean): Promise<unknown[]> {
+  if (!inline) return urls.map((url) => ({ type: 'image', source: { type: 'url', url } }));
+  return Promise.all(
+    urls.map(async (url) => {
+      try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 6000);
+        const r = await fetch(url, { signal: ctl.signal }).finally(() => clearTimeout(t));
+        const type = r.headers.get('content-type') ?? '';
+        if (!r.ok || !/^image\/(jpeg|png|webp|gif)/.test(type)) throw new Error('bad image');
+        return { type: 'image', source: { type: 'base64', media_type: type.split(';')[0], data: toB64(await r.arrayBuffer()) } };
+      } catch {
+        return { type: 'image', source: { type: 'url', url } };
+      }
+    }),
+  );
+}
+
+export function readCover(imageBase64: string, model: Model = DEFAULT_KNOBS.readModel): Promise<CoverRead> {
   return structured<CoverRead>(
+    model,
     'You identify comic books from phone photos of their front covers for a collector’s app. Read the logo, title, issue number box, publisher mark, price box, dates, the barcode digits and any variant or printing markings. Use your knowledge of comics to normalise the series title the way catalogues list it (e.g. "The Amazing Spider-Man" → "Amazing Spider-Man"). If something is not visible, return null for it rather than guessing.',
     [photoBlock(imageBase64), { type: 'text', text: 'Identify this comic.' }],
     READ_SCHEMA,
@@ -102,23 +158,29 @@ const COARSE_SCHEMA = {
 } as const;
 
 /** Photo vs many small covers → up to 3 plausible candidates, best first. */
-export async function coarseRank(imageBase64: string, cands: Candidate[]): Promise<{ ranked: Candidate[]; reason: string }> {
+export async function coarseRank(
+  imageBase64: string,
+  cands: Candidate[],
+  knobs: ScanKnobs = DEFAULT_KNOBS,
+): Promise<{ ranked: Candidate[]; reason: string }> {
   const usable = cands.filter((c) => c.cover);
   if (usable.length <= 3) return { ranked: usable, reason: 'few candidates' };
+  const imgs = await imageBlocks(usable.map(thumb), knobs.inline);
   const content: unknown[] = [{ type: 'text', text: 'PHOTO of the comic the collector is holding:' }, photoBlock(imageBase64)];
   usable.forEach((c, i) => {
-    content.push({ type: 'text', text: `#${i + 1}` });
-    content.push({ type: 'image', source: { type: 'url', url: thumb(c) } });
+    content.push({ type: 'text', text: `#${i + 1} ${c.name}` });
+    content.push(imgs[i]);
   });
   content.push({
     type: 'text',
-    text: `Those are ${usable.length} small catalogue covers. Which have the SAME ARTWORK as the photo? Compare the illustration itself (characters, pose, composition, colours) — ignore glare, angle, lighting and sleeves. Return up to 3 numbers, best first, or an empty list if none has the same artwork.`,
+    text: [
+      `Those are ${usable.length} small catalogue covers. Which have the SAME ARTWORK as the photo?`,
+      '- Compare the illustration itself (characters, pose, composition, colours) — ignore glare, angle, lighting and bags.',
+      '- Reprints, foils and convention editions often reuse the main artwork: when several candidates share the photo’s artwork, include the one named "Main cover" among your picks.',
+      '- Return up to 3 numbers, best first, or an empty list if none has the same artwork.',
+    ].join('\n'),
   });
-  const r = await structured<{ ranked: number[]; reason: string }>(
-    'You match phone photos of comic covers to catalogue cover images.',
-    content,
-    COARSE_SCHEMA,
-  );
+  const r = await structured<{ ranked: number[]; reason: string }>(knobs.coarseModel, 'You match phone photos of comic covers to catalogue cover images.', content, COARSE_SCHEMA);
   const ranked = r.ranked.map((n) => usable[n - 1]).filter(Boolean);
   return { ranked: [...new Set(ranked)].slice(0, 3), reason: r.reason };
 }
@@ -135,13 +197,18 @@ const FINE_SCHEMA = {
 } as const;
 
 /** Photo vs a few full-size covers → the exact one. */
-export async function fineMatch(imageBase64: string, cands: Candidate[]): Promise<{ pick: Candidate | null; confidence: number; reason: string }> {
+export async function fineMatch(
+  imageBase64: string,
+  cands: Candidate[],
+  knobs: ScanKnobs = DEFAULT_KNOBS,
+): Promise<{ pick: Candidate | null; confidence: number; reason: string }> {
   const usable = cands.filter((c) => c.cover);
   if (!usable.length) return { pick: null, confidence: 0, reason: 'no candidate covers' };
+  const imgs = await imageBlocks(usable.map(full), knobs.inline);
   const content: unknown[] = [{ type: 'text', text: 'PHOTO of the comic the collector is holding:' }, photoBlock(imageBase64)];
   usable.forEach((c, i) => {
     content.push({ type: 'text', text: `CANDIDATE ${i + 1}: ${c.name}` });
-    content.push({ type: 'image', source: { type: 'url', url: full(c) } });
+    content.push(imgs[i]);
   });
   content.push({
     type: 'text',
@@ -149,11 +216,12 @@ export async function fineMatch(imageBase64: string, cands: Candidate[]): Promis
       'Which candidate is exactly the same cover as the photo?',
       '- The artwork must match; then use the details to tell apart covers that share art: trade dress and logo, issue box, "2nd/3rd printing" text, "virgin" (no logo/text), store-exclusive logos, black & white or sketch versions.',
       '- Glare, reflections, lighting and bags are from the photo — they are NOT foil or a special finish.',
-      '- If the artwork matches several candidates and you cannot see anything that picks one out, choose the one named "Main cover" when it is among them.',
+      '- Reprints, foil and convention editions usually say so on the cover. If the artwork matches several candidates and you cannot see such a marking on the photo, choose the one named "Main cover".',
       '- Answer null if no candidate has the same artwork.',
     ].join('\n'),
   });
   const r = await structured<{ match: number | null; confidence: number; reason: string }>(
+    knobs.fineModel,
     'You compare a photo of a comic book cover with catalogue cover images and pick the exact matching cover.',
     content,
     FINE_SCHEMA,
@@ -220,6 +288,7 @@ export async function classifyGenres(series: { key: string; title: string; publi
   if (!series.length) return {};
   const list = series.map((s) => `${s.key} | ${s.title}${s.publisher ? ` (${s.publisher})` : ''}`).join('\n');
   const r = await structured<{ items: { key: string; genres: string[] }[] }>(
+    'claude-opus-5',
     'You tag comic book series with genres for a collector app. Use your knowledge of each series; superhero books are "Superhero" even when they are also sci-fi. Pick 1–2 genres from the allowed list.',
     [{ type: 'text', text: `Tag each series (format: key | title (publisher)):\n${list}` }],
     GENRE_SCHEMA,

@@ -1,35 +1,26 @@
 // Market-value refresh for owned comics: one raw-copy estimate per owned
 // cover (main or variant), summed and stored on the entry as `est`.
 import { useSyncExternalStore } from 'react';
+import { api } from '../api/client';
 import { priceFor } from '../api/prices';
 import { collection } from './collection';
-import type { Entry } from '../types';
+import { estimateCopies } from '../lib/shelf';
+import type { ComicDetail, Entry } from '../types';
 
 type Progress = { done: number; total: number } | null;
 let progress: Progress = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
-export async function estimateFor(e: Entry): Promise<number | null> {
-  // Only look up market prices if specific variants are tracked.
-  // Without variant info, we can't know which copy the user owns (1st print vs reprint, etc)
-  // so we skip market pricing and fall back to cover price.
-  if (!e.variants.length) return null;
+export const estimateFor = (e: Entry) => estimateCopies(e, priceFor);
 
-  let sum = 0;
-  let any = false;
-  for (const v of e.variants) {
-    const isMain = !v || v.id === e.comicId;
-    const p = await priceFor(e.meta, isMain ? null : v.name).catch(() => null);
-    const each = p?.raw ?? (isMain ? null : (await priceFor(e.meta).catch(() => null))?.raw ?? null);
-    if (each != null) {
-      sum += each;
-      any = true;
-    } else if (e.meta.price != null) {
-      sum += e.meta.price; // unknown copy: count it at cover price
-    }
-  }
-  return any ? Math.round(sum * 100) / 100 : null;
+/** A comic with only one cover can't be "which cover?" — pick it for you. */
+export async function autoPickOnlyCover(e: Entry, known?: ComicDetail | null): Promise<Entry> {
+  if (!e.owned || e.variants.length) return e;
+  const d = known ?? (await api.comic(e.meta).catch(() => null));
+  if (!d || d.variants.length) return e;
+  await collection.patch(e.meta, { variants: [{ id: e.comicId, name: 'Main cover', cover: d.cover ?? e.meta.cover, price: d.price ?? e.meta.price }] });
+  return collection.entry(e.comicId) ?? e;
 }
 
 export async function refreshValues(entries: Entry[], opts?: { force?: boolean }) {
@@ -41,7 +32,8 @@ export async function refreshValues(entries: Entry[], opts?: { force?: boolean }
   let i = 0;
   const worker = async () => {
     while (i < todo.length) {
-      const e = todo[i++];
+      const orig = todo[i++];
+      const e = await autoPickOnlyCover(orig).catch(() => orig);
       try {
         const est = await estimateFor(e);
         const cur = collection.entry(e.comicId);
@@ -59,6 +51,28 @@ export async function refreshValues(entries: Entry[], opts?: { force?: boolean }
     progress = null;
     emit();
   }
+}
+
+// Values used to be estimated as if every owned comic were the 1st-print main
+// cover. Once per device: recompute everything under the cover-aware rules.
+const VALUES_VERSION = '2';
+let migrating: Promise<void> | null = null;
+export function migrateValues(entries: Entry[]): Promise<void> {
+  migrating ??= (async () => {
+    try {
+      if (localStorage.getItem('lbx-values-v') === VALUES_VERSION) return;
+    } catch {
+      return;
+    }
+    const owned = entries.filter((e) => e.owned);
+    if (owned.length) await refreshValues(owned, { force: true });
+    try {
+      localStorage.setItem('lbx-values-v', VALUES_VERSION);
+    } catch {
+      // retried next launch
+    }
+  })();
+  return migrating;
 }
 
 export function useValueRefresh(): Progress {

@@ -1,6 +1,6 @@
 // Longbox service worker — instant launches, offline shell, cached covers.
 // Data itself is cached by the page in IndexedDB.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `longbox-shell-${VERSION}`;
 const IMG_CACHE = 'longbox-img-v1';
 const IMG_MAX = 1500;
@@ -69,9 +69,11 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // navigations / index.html: network-first, cached shell as offline fallback
+  // navigations / index.html: network-first, cached shell as offline fallback.
+  // `no-cache` revalidates with the server (a cheap 304 when unchanged) so an
+  // update reload can never be answered by a stale copy in the HTTP cache.
   e.respondWith(
-    fetch(req)
+    fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
       .then((r) => {
         if (r.ok) {
           const copy = r.clone();

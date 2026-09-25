@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { AuthScreen } from './Auth';
-import { NavProvider, useNav, type Route } from './state/nav';
+import { NavProvider, routeKey, useNav, type Route } from './state/nav';
 import { ActionsCtx, type Actions } from './state/actions';
 import { collection, useCollection } from './state/collection';
 import { loadFollows } from './state/follows';
 import { portfolio } from './lib/shelf';
+import { migrateValues } from './state/values';
 import { recordValue } from './ui/ValueSparkline';
 import { loadProfiles, useProfiles } from './state/profiles';
 import { refreshAll } from './state/refresh';
@@ -92,7 +93,14 @@ function Shell() {
   }, [selfId, guest]);
 
   // one value-history point per day for the portfolio chart
-  const { entries: myEntries, loaded: collectionLoaded } = useCollection();
+  const { entries: myEntries, loaded: collectionLoaded, syncing } = useCollection();
+
+  // values stored under the old "every copy is the 1st print" rule: recompute once
+  useEffect(() => {
+    if (!selfId || !collectionLoaded || syncing) return;
+    const t = window.setTimeout(() => void migrateValues([...collection.get().entries.values()]), 3000);
+    return () => window.clearTimeout(t);
+  }, [selfId, collectionLoaded, syncing]);
   useEffect(() => {
     if (!selfId || !collectionLoaded) return;
     const t = window.setTimeout(() => {
@@ -102,33 +110,42 @@ function Shell() {
     return () => window.clearTimeout(t);
   }, [selfId, collectionLoaded, myEntries]);
 
-  // ── auto-update: a new deploy reloads the app once (90s cooldown) ──
+  // ── auto-update: a new deploy reloads the app (90s cooldown) ──
+  // Checked at launch and on every return to the foreground (reload right
+  // away), and every minute while open — that one waits until nothing is
+  // open or being typed in, so it never interrupts.
   useEffect(() => {
     const mine = import.meta.env.VITE_BUILD_ID as string | undefined;
     if (!mine) return;
-    const check = async () => {
+    const idle = () => !hasBack() && !document.activeElement?.closest?.('input, textarea');
+    const check = async (now: boolean) => {
       try {
         const r = await fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: 'no-store' });
         if (!r.ok) return;
         const { build } = (await r.json()) as { build?: string };
-        if (build && String(build) !== String(mine)) {
-          const last = Number(sessionStorage.getItem('lbx-reload-at') ?? 0);
-          if (Date.now() - last < 90_000) return;
-          sessionStorage.setItem('lbx-reload-at', String(Date.now()));
-          const reg = await navigator.serviceWorker?.getRegistration();
-          await reg?.update().catch(() => {});
-          window.location.reload();
-        }
+        if (!build || String(build) === String(mine) || !(now || idle())) return;
+        const last = Number(sessionStorage.getItem('lbx-reload-at') ?? 0);
+        if (Date.now() - last < 90_000) return;
+        sessionStorage.setItem('lbx-reload-at', String(Date.now()));
+        const reg = await navigator.serviceWorker?.getRegistration();
+        await reg?.update().catch(() => {});
+        window.location.reload();
       } catch {
         // offline
       }
     };
-    void check();
+    void check(true);
     const onVis = () => {
-      if (document.visibilityState === 'visible') void check();
+      if (document.visibilityState === 'visible') void check(true);
     };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void check(false);
+    }, 60_000);
     document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.clearInterval(timer);
+    };
   }, []);
 
   const doRefresh = useCallback(async () => {
@@ -373,22 +390,6 @@ function Shell() {
       </div>
     </ActionsCtx.Provider>
   );
-}
-
-function routeKey(r: Route): string {
-  switch (r.t) {
-    case 'comic':
-    case 'series':
-      return `${r.t}:${r.id}`;
-    case 'shelf':
-      return `shelf:${r.shelf}:${r.userId}`;
-    case 'portfolio':
-    case 'profile':
-    case 'stats':
-      return `${r.t}:${r.userId}`;
-    default:
-      return r.t;
-  }
 }
 
 function RouteLayer({ route, onClose }: { route: Route; onClose: () => void }) {

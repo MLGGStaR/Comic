@@ -66,6 +66,26 @@ export function PortfolioScreen({ userId, onClose }: { userId: string; onClose: 
           ) : null}
         </section>
 
+        {isSelf && p.unpicked.length ? (
+          <section className="rounded-2xl border border-lb-orange/25 bg-lb-orange/[0.07] p-4">
+            <div className="text-[13px] font-semibold text-lb-orange">Pick your covers</div>
+            <p className="text-xs text-ink-1 mt-1 leading-relaxed">
+              {p.unpicked.length === 1 ? '1 comic has' : `${p.unpicked.length} comics have`} no cover picked, so {p.unpicked.length === 1 ? 'it’s' : 'they’re'} counted at cover
+              price. Tap one and choose the cover you own — a variant or a later printing is worth something different from the 1st print.
+            </p>
+            <div className="flex gap-2 overflow-x-auto -mx-4 px-4 mt-3 pb-1">
+              {p.unpicked.slice(0, 30).map((e) => (
+                <button key={e.comicId} onClick={() => a.quickLog(e.meta)} className="w-[56px] flex-shrink-0 text-left">
+                  <div className="aspect-[2/3] rounded overflow-hidden bg-bg-2">
+                    <Cover src={e.meta.cover} alt={e.meta.title} className="w-full h-full" />
+                  </div>
+                  <div className="text-[9.5px] text-ink-1 mt-1 line-clamp-2 leading-tight">{e.meta.title}</div>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {counted ? (
           <section>
             <SectionHeader>How it's valued</SectionHeader>
@@ -140,8 +160,8 @@ export function PortfolioScreen({ userId, onClose }: { userId: string; onClose: 
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-semibold truncate">{e.meta.title}</div>
                       <div className="text-[11px] text-ink-2 truncate">
-                        {v.basis ? BASIS_UI[v.basis].label : ''}
-                        {e.variants.length > 1 ? ` · ${e.variants.length} copies` : ''}
+                        {v.unpicked ? <span className="text-lb-orange">Cover not picked</span> : e.variants.length > 1 ? `${e.variants.length} covers` : e.variants[0]?.name}
+                        {v.basis ? ` · ${BASIS_UI[v.basis].label}` : ''}
                       </div>
                     </div>
                     <div className="font-display text-[15px] font-extrabold text-lb-green">{fmtMoney(v.amount)}</div>
@@ -158,8 +178,8 @@ export function PortfolioScreen({ userId, onClose }: { userId: string; onClose: 
         ) : null}
 
         <p className="text-[11px] text-ink-2 leading-relaxed">
-          Market values are estimates for raw (ungraded) copies from recent sales data where available; otherwise the
-          cover price is used. Set your own value or what you paid on any comic’s page.
+          Each comic is valued by the covers you picked: market estimates for raw (ungraded) copies of that exact cover from recent
+          sales where available, otherwise its cover price. Set your own value or what you paid on any comic’s page.
         </p>
       </div>
     </Screen>

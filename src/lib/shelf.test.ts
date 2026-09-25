@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { issueNum, compareComics, valueOf, portfolio, shelfView } from './shelf';
-import type { ComicLite, Entry } from '../types';
+import { issueNum, compareComics, valueOf, portfolio, shelfView, estimateCopies } from './shelf';
+import type { ComicLite, Entry, OwnedVariant } from '../types';
 
 const comic = (over: Partial<ComicLite>): ComicLite => ({
   id: 'x',
@@ -34,6 +34,8 @@ const entry = (over: Omit<Partial<Entry>, 'meta'> & { meta?: Partial<ComicLite> 
   meta: comic(over.meta ?? {}),
 });
 
+const MAIN = (id = 'x'): OwnedVariant => ({ id, name: 'Main cover', cover: null });
+
 describe('issueNum', () => {
   test('plain, fractional and odd numbers sort as numbers', () => {
     expect(issueNum('2')).toBe(2);
@@ -57,25 +59,59 @@ describe('compareComics', () => {
 
 describe('valueOf', () => {
   test('your own value beats everything', () => {
-    expect(valueOf(entry({ value: 50, est: 20 }))).toEqual({ amount: 50, basis: 'yours' });
+    expect(valueOf(entry({ value: 50, est: 20, variants: [MAIN()] }))).toEqual({ amount: 50, basis: 'yours' });
   });
-  test('market estimate beats cover price', () => {
-    expect(valueOf(entry({ est: 12.5 }))).toEqual({ amount: 12.5, basis: 'market' });
+  test('market estimate of the covers you picked beats cover price', () => {
+    expect(valueOf(entry({ est: 12.5, variants: [MAIN()] }))).toEqual({ amount: 12.5, basis: 'market' });
   });
-  test('falls back to cover price × copies owned', () => {
+  test('no cover picked: cover price, flagged — never a market price for a cover you may not have', () => {
+    expect(valueOf(entry({ est: 60 }))).toEqual({ amount: 4.99, basis: 'cover', unpicked: true });
+  });
+  test('falls back to each copy’s own cover price', () => {
     const e = entry({
       variants: [
-        { id: 'v1', name: 'A', cover: null },
+        { id: 'v1', name: 'Cover B Card Stock', cover: null, price: 5.99 },
         { id: 'v2', name: 'B', cover: null },
       ],
     });
-    expect(valueOf(e)).toEqual({ amount: 9.98, basis: 'cover' });
+    expect(valueOf(e)).toEqual({ amount: 10.98, basis: 'cover' });
   });
   test('nothing known → no value', () => {
-    expect(valueOf(entry({ meta: { price: null } }))).toEqual({ amount: null, basis: null });
+    expect(valueOf(entry({ meta: { price: null }, variants: [MAIN()] }))).toEqual({ amount: null, basis: null });
   });
   test('things you do not own are worth nothing to the portfolio', () => {
     expect(valueOf(entry({ owned: false, read: true, est: 30 }))).toEqual({ amount: null, basis: null });
+  });
+});
+
+describe('estimateCopies', () => {
+  const prices: Record<string, number | null> = { main: 60, 'Cover B Jim Lee Variant': 25 };
+  const price = async (_c: ComicLite, variantName: string | null) => {
+    const raw = prices[variantName ?? 'main'];
+    return raw == null ? null : { raw };
+  };
+  test('no cover picked → no market estimate', async () => {
+    expect(await estimateCopies(entry({}), price)).toBeNull();
+  });
+  test('each picked cover at its own market price', async () => {
+    const e = entry({ variants: [MAIN(), { id: 'v1', name: 'Cover B Jim Lee Variant', cover: null }] });
+    expect(await estimateCopies(e, price)).toBe(85);
+  });
+  test('a variant with no listing counts at its cover price, not the main cover’s market price', async () => {
+    const e = entry({ variants: [{ id: 'v9', name: 'Cover F 1:25 Ian Bertram Variant', cover: null, price: 5.99 }] });
+    expect(await estimateCopies(e, price)).toBeNull(); // nothing listed → valueOf uses cover prices
+    const both = entry({ variants: [MAIN(), { id: 'v9', name: 'Cover F 1:25 Ian Bertram Variant', cover: null }] });
+    expect(await estimateCopies(both, price)).toBe(64.99);
+  });
+  test('collector photos (covers the catalogue lacks) are never price-matched', async () => {
+    const seen: (string | null)[] = [];
+    const spy = async (c: ComicLite, v: string | null) => {
+      seen.push(v);
+      return price(c, v);
+    };
+    const e = entry({ variants: [MAIN(), { id: 'custom:1', name: 'FOMO Books exclusive', cover: null }] });
+    expect(await estimateCopies(e, spy)).toBe(64.99);
+    expect(seen).toEqual([null]);
   });
 });
 
@@ -84,7 +120,7 @@ describe('shelfView', () => {
     entry({ meta: { id: 'a', series: 'Saga', number: '2', releaseDate: '2012-04-01', publisher: 'Image' }, read: true, readAt: '2026-01-05', rating: 4 }),
     entry({ meta: { id: 'b', series: 'Absolute Batman', number: '10', releaseDate: '2025-08-01' }, read: true, readAt: '2026-03-01', rating: 5 }),
     entry({ meta: { id: 'c', series: 'Absolute Batman', number: '2', releaseDate: '2024-11-06' }, read: true, readAt: '2026-02-01' }),
-    entry({ meta: { id: 'd', series: 'Batman', number: '1', releaseDate: null }, owned: true, est: 40 }),
+    entry({ meta: { id: 'd', series: 'Batman', number: '1', releaseDate: null }, owned: true, est: 40, variants: [MAIN('d')] }),
   ];
   const ids = (xs: Entry[]) => xs.map((e) => e.comicId);
 
@@ -120,10 +156,10 @@ describe('shelfView', () => {
 describe('portfolio', () => {
   test('totals, paid, basis counts and publisher split', () => {
     const p = portfolio([
-      entry({ meta: { id: 'a', publisher: 'DC Comics' }, est: 20, paid: 5 }),
+      entry({ meta: { id: 'a', publisher: 'DC Comics' }, est: 20, paid: 5, variants: [MAIN('a')] }),
       entry({ meta: { id: 'b', publisher: 'Marvel' }, value: 100 }),
-      entry({ meta: { id: 'c', publisher: 'Marvel', price: null } }),
-      entry({ meta: { id: 'd', publisher: 'Image' } }),
+      entry({ meta: { id: 'c', publisher: 'Marvel', price: null }, variants: [MAIN('c')] }),
+      entry({ meta: { id: 'd', publisher: 'Image' }, variants: [MAIN('d')] }),
       entry({ meta: { id: 'e' }, owned: false, wishlist: true, est: 999 }),
     ]);
     expect(p.total).toBeCloseTo(124.99);
@@ -133,5 +169,10 @@ describe('portfolio', () => {
     expect(p.byPublisher.map((x) => x.publisher)).toEqual(['Marvel', 'DC Comics', 'Image']);
     expect(p.byPublisher[0].value).toBe(100);
     expect(p.top.map((e) => e.comicId)).toEqual(['b', 'a', 'd']);
+  });
+  test('counts owned comics whose cover is not picked yet (your own value settles it)', () => {
+    const p = portfolio([entry({ meta: { id: 'a' } }), entry({ meta: { id: 'b' }, est: 80 }), entry({ meta: { id: 'c' }, value: 10 }), entry({ meta: { id: 'd' }, variants: [MAIN('d')] })]);
+    expect(p.unpicked.map((e) => e.comicId)).toEqual(['a', 'b']);
+    expect(p.total).toBeCloseTo(4.99 + 4.99 + 10 + 4.99);
   });
 });

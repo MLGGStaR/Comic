@@ -1,6 +1,6 @@
 // Search: type "absolute batman #2" or "saga vol 1" → the one comic you
-// meant, big. Variants and reprints are folded away; a small "Not it?"
-// expander keeps the few genuinely different matches one tap away.
+// meant, big, with the few genuinely different matches as small rows under
+// it. Variants and reprints are folded away.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { useActions } from '../state/actions';
@@ -232,7 +232,15 @@ function MoreRow({ hit }: { hit: SearchHit }) {
     c ? () => a.quickLog(c) : undefined,
   );
   return (
-    <button {...press} className="w-full flex items-center gap-3 p-2 rounded-xl active:bg-bg-1 text-left">
+    <button
+      {...press}
+      onPointerDown={(e) => {
+        // start loading the page as the finger lands, not when it lifts
+        if (c) void api.comic(c).catch(() => {});
+        press.onPointerDown(e);
+      }}
+      className="w-full flex items-center gap-3 p-2 rounded-xl active:bg-bg-1 text-left"
+    >
       <div className="relative w-11 aspect-[2/3] rounded overflow-hidden bg-bg-2 flex-shrink-0">
         <Cover src={c?.cover ?? s?.cover} alt={c?.title ?? s!.title} className="w-full h-full" />
         {entry ? <StatusBadge owned={entry.owned} read={entry.read} wishlist={entry.wishlist} /> : null}

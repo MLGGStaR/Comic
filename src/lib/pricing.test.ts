@@ -47,10 +47,8 @@ describe('pickProduct', () => {
     ).toBe('Absolute Batman [Johnson] #2 (2024)');
   });
 
-  test('an unmatched variant falls back to the main cover', () => {
-    expect(pickProduct(list, { series: 'Absolute Batman', number: '2', year: 2024, variantName: 'Cover F Rafael Albuquerque Variant' })?.productName).toBe(
-      'Absolute Batman #2 (2024)',
-    );
+  test('an unmatched variant has no price — never the main cover’s', () => {
+    expect(pickProduct(list, { series: 'Absolute Batman', number: '2', year: 2024, variantName: 'Cover F Rafael Albuquerque Variant' })).toBeNull();
   });
 
   test('the right volume by year', () => {

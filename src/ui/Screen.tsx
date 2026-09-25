@@ -1,6 +1,9 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { useBackLayer } from '../lib/backstack';
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { markSwipeBack, useBackLayer } from '../lib/backstack';
 import { Icon } from './Icon';
+
+/** Taps this soon after a page opens were aimed at the page underneath. */
+const SETTLE_MS = 450;
 
 // A pushed page (comic, series, shelf…): slides in from the right, closes
 // with the back chevron, Android back, or an iOS-style swipe from the left
@@ -23,6 +26,24 @@ export function Screen({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLDivElement | null>(null);
+
+  // A second tap while this page slides in (e.g. a double tap on a search
+  // result) must not hit content the user hasn't seen. Swallow clicks from the
+  // first moments — by when the finger touched (event time), not by when the
+  // browser got round to delivering them.
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const until = performance.now() + SETTLE_MS;
+    const block = (e: MouseEvent) => {
+      if (e.timeStamp < until) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    root.addEventListener('click', block, true);
+    return () => root.removeEventListener('click', block, true);
+  }, []);
 
   // solid bar after scrolling (direct DOM writes — no re-render per frame)
   useEffect(() => {
@@ -47,9 +68,10 @@ export function Screen({
     let st = 0;
     let tracking = false;
     let engaged = false;
+    let closing = false;
     const onStart = (e: TouchEvent) => {
       const t = e.touches[0];
-      if (t.clientX > 28) return;
+      if (closing || t.clientX > 28) return;
       sx = t.clientX;
       sy = t.clientY;
       st = Date.now();
@@ -81,6 +103,8 @@ export function Screen({
       const dx = Math.max(0, e.changedTouches[0].clientX - sx);
       const v = dx / Math.max(1, Date.now() - st);
       if (dx > window.innerWidth * 0.33 || (v > 0.5 && dx > 50)) {
+        closing = true;
+        markSwipeBack();
         root.style.transition = 'transform 170ms ease-out';
         root.style.transform = 'translateX(100%)';
         window.setTimeout(onClose, 160);

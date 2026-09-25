@@ -2,10 +2,12 @@
 // your rating, then tabs — Overview, Variants (log each cover you own) and
 // Reviews (friends first, then the community and critics).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, comicParams } from '../api/client';
+import { api, comicParams, type ComicExtras } from '../api/client';
 import { priceFor, type PriceEstimate } from '../api/prices';
+import { removeCustomCover } from '../api/covers';
 import { estimateFor } from '../state/values';
 import type { ComicDetail, ComicLite, Variant, Review } from '../types';
+import { AddCoverSheet, CoverPicker, allCovers, coversChanged, toggleOwnedCover } from '../ui/CoverPicker';
 import { Screen } from '../ui/Screen';
 import { Cover } from '../ui/Cover';
 import { StarPicker, Stars, starsOf } from '../ui/Stars';
@@ -27,23 +29,50 @@ import { compact } from '../views/Search';
 type Tab = 'overview' | 'variants' | 'reviews';
 
 export function ComicScreen({ id, seed, onClose }: { id: string; seed?: ComicLite; onClose: () => void }) {
-  const [detail, setDetail] = useState<ComicDetail | null>(null);
+  const [core, setCore] = useState<ComicDetail | null>(null);
+  const [extras, setExtras] = useState<ComicExtras | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
-  const [zoom, setZoom] = useState<{ src: string | null; title: string } | null>(null);
+  const [zoom, setZoom] = useState<{ src: string | null; title: string; variant?: Variant } | null>(null);
+  const [nonce, setNonce] = useState(0);
   const entry = useEntry(id);
   const a = useActions();
 
+  // a cover photo was added / removed: refetch (the cached copy was dropped)
+  useEffect(() => coversChanged.on((cid) => cid === id && setNonce((n) => n + 1)), [id]);
+
+  // the page itself: detail + every cover (fast)
   useEffect(() => {
     let alive = true;
     setErr(null);
     const hint = seed ?? collection.entry(id)?.meta ?? { id };
-    api.swr<ComicDetail>('comic', comicParams(hint), 12 * 3600e3, (d) => alive && setDetail(d)).catch((e: Error) => alive && setErr(e.message));
+    api.swr<ComicDetail>('comic', comicParams(hint), 12 * 3600e3, (d) => alive && setCore(d)).catch((e: Error) => alive && setErr(e.message));
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, nonce]);
+
+  // reviews, scores, credits, previous / next: slower sources, fetched
+  // alongside — they need the title + series, from the seed or the detail
+  const hintFor = seed?.seriesId ? seed : entry?.meta.seriesId ? entry.meta : core;
+  const hintReady = !!hintFor;
+  useEffect(() => {
+    if (!hintFor) return;
+    let alive = true;
+    api.swr<ComicExtras>('extras', comicParams(hintFor), 12 * 3600e3, (d) => alive && setExtras(d)).catch(() => alive && setExtras({}));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, hintReady]);
+
+  const detail: ComicDetail | null = useMemo(() => {
+    if (!core) return null;
+    const add = Object.fromEntries(Object.entries(extras ?? {}).filter(([, v]) => v != null && !(Array.isArray(v) && !v.length)));
+    return { ...core, ...add };
+  }, [core, extras]);
+  const extrasLoading = extras == null;
 
   // the lite record everything else keys on (detail wins once it arrives)
   const lite: ComicLite | null = useMemo(() => {
@@ -100,14 +129,14 @@ export function ComicScreen({ id, seed, onClose }: { id: string; seed?: ComicLit
             {tab === 'overview' ? (
               <Overview comic={lite} detail={detail} err={err} />
             ) : tab === 'variants' ? (
-              <Variants comic={lite} detail={detail} onZoom={(v) => setZoom({ src: v.cover, title: v.name })} />
+              <Variants comic={lite} detail={detail} onZoom={(v) => setZoom({ src: v.cover, title: v.name, variant: v })} />
             ) : (
-              <Reviews comic={lite} detail={detail} />
+              <Reviews comic={lite} detail={detail} loading={extrasLoading} />
             )}
           </div>
         </>
       ) : null}
-      {zoom ? <Zoom src={zoom.src} title={zoom.title} onClose={() => setZoom(null)} /> : null}
+      {zoom ? <Zoom src={zoom.src} title={zoom.title} comicId={id} variant={zoom.variant} onClose={() => setZoom(null)} /> : null}
     </Screen>
   );
 }
@@ -130,13 +159,35 @@ export function toLite(d: ComicDetail): ComicLite {
   };
 }
 
+/** The cover drawn into a tiny canvas and stretched: the smooth upscale IS the
+ *  blur — no CSS filter for the phone to redraw while the page slides in. */
+function Backdrop({ src }: { src: string }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => {
+      const c = ref.current;
+      const ctx = c?.getContext('2d');
+      if (!c || !ctx) return;
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      c.style.opacity = '0.5';
+    };
+    img.src = src;
+    return () => {
+      img.onload = null;
+    };
+  }, [src]);
+  return <canvas ref={ref} width={12} height={18} className="absolute inset-0 w-full h-full transition-opacity duration-500" style={{ opacity: 0 }} />;
+}
+
 function Hero({ comic, detail, onZoom }: { comic: ComicLite; detail: ComicDetail | null; onZoom: () => void }) {
   const src = detail?.cover ?? comic.cover;
   return (
     <div className="relative pt-[calc(env(safe-area-inset-top)+64px)] pb-6 overflow-hidden">
       {src ? (
         <div className="absolute inset-0 -z-0">
-          <img src={src} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover scale-125 blur-2xl opacity-45" />
+          <Backdrop src={src} />
           <div className="absolute inset-0 bg-gradient-to-b from-bg-0/30 via-bg-0/55 to-bg-0" />
         </div>
       ) : null}
@@ -279,7 +330,7 @@ function Overview({ comic, detail, err }: { comic: ComicLite; detail: ComicDetai
         </div>
       ) : null}
 
-      <YourCopy comic={comic} />
+      <YourCopy comic={comic} detail={detail} />
       <MarketValue comic={comic} />
 
       {creators.length ? (
@@ -373,7 +424,7 @@ function MarketValue({ comic }: { comic: ComicLite }) {
   );
 }
 
-function YourCopy({ comic }: { comic: ComicLite }) {
+function YourCopy({ comic, detail }: { comic: ComicLite; detail: ComicDetail | null }) {
   const entry = useEntry(comic.id);
   const [edit, setEdit] = useState(false);
   const [paid, setPaid] = useState('');
@@ -396,6 +447,7 @@ function YourCopy({ comic }: { comic: ComicLite }) {
   if (!entry?.owned) return null;
   const v = valueOf(entry);
   const copies = Math.max(1, entry.variants.length);
+  const names = entry.variants.map((x) => x.name);
   const save = () => {
     const num = (s: string) => (s.trim() === '' ? null : Math.max(0, Number(s.replace(/[^0-9.]/g, ''))));
     void collection.patch(comic, { paid: num(paid), value: num(value) });
@@ -412,6 +464,7 @@ function YourCopy({ comic }: { comic: ComicLite }) {
             {v.basis === 'yours' ? 'your value' : v.basis === 'market' ? 'market estimate' : v.basis === 'cover' ? 'at cover price' : 'no value yet'}
             {entry.paid != null ? ` · paid ${fmtMoney(entry.paid)}` : ''}
           </div>
+          {names.length ? <div className="text-[11px] text-ink-1 mt-1 line-clamp-2">{names.join(' · ')}</div> : null}
         </div>
         <button
           onClick={() => {
@@ -439,6 +492,7 @@ function YourCopy({ comic }: { comic: ComicLite }) {
           </button>
         </div>
       ) : null}
+      {v.unpicked ? <CoverPicker comic={comic} detail={detail} className="mt-3 !bg-bg-0/50" /> : null}
     </div>
   );
 }
@@ -446,34 +500,33 @@ function YourCopy({ comic }: { comic: ComicLite }) {
 function Variants({ comic, detail, onZoom }: { comic: ComicLite; detail: ComicDetail | null; onZoom: (v: Variant) => void }) {
   const entry = useEntry(comic.id);
   const a = useActions();
+  const [adding, setAdding] = useState(false);
   if (!detail) return <div className="grid grid-cols-3 gap-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="aspect-[2/3] rounded-lg skeleton" />)}</div>;
-  const main: Variant = { id: comic.id, name: 'Main cover', cover: detail.cover ?? comic.cover, price: detail.price };
-  const all = [main, ...detail.variants];
+  const all = allCovers(comic, detail);
   const ownedIds = new Set(entry?.variants.map((v) => v.id) ?? []);
-  const implicitMain = !!entry?.owned && ownedIds.size === 0;
-  const isOwned = (v: Variant) => ownedIds.has(v.id) || (implicitMain && v.id === main.id);
+  const unpicked = !!entry?.owned && ownedIds.size === 0;
 
   const toggle = (v: Variant) => {
     if (!a.requireLogin()) return;
     navigator.vibrate?.(8);
-    let cur = entry?.variants ?? [];
-    if (implicitMain) cur = [{ id: main.id, name: main.name, cover: main.cover }];
-    const has = cur.some((x) => x.id === v.id);
-    const next = has ? cur.filter((x) => x.id !== v.id) : [...cur, { id: v.id, name: v.name, cover: v.cover }];
-    if (!next.length) void collection.patch(comic, { owned: false });
-    else void collection.patch(comic, { variants: next });
-    toast(has ? `Removed ${v.name}` : `Logged ${v.name}`);
+    const added = toggleOwnedCover(comic, v);
+    toast(added ? `Logged ${v.name}` : `Removed ${v.name}`);
   };
 
   return (
     <div className="fade-in">
+      {unpicked ? (
+        <div className="rounded-xl bg-lb-orange/[0.08] border border-lb-orange/25 px-3 py-2.5 mb-3 text-[12px] text-lb-orange font-semibold">
+          You have this comic — tap ＋ on the cover you own so it’s valued right.
+        </div>
+      ) : null}
       <div className="text-xs text-ink-2 mb-3">
-        {all.length} cover{all.length === 1 ? '' : 's'} · tap the circle to log the ones you own
-        {ownedIds.size || implicitMain ? <span className="text-lb-green"> · you have {implicitMain ? 1 : ownedIds.size}</span> : null}
+        {all.length} cover{all.length === 1 ? '' : 's'} · tap ＋ to log the ones you own
+        {ownedIds.size ? <span className="text-lb-green"> · you have {ownedIds.size}</span> : null}
       </div>
       <div className="grid grid-cols-3 gap-2.5">
         {all.map((v) => {
-          const own = isOwned(v);
+          const own = ownedIds.has(v.id);
           return (
             <div key={v.id} className="min-w-0">
               <div className={`relative aspect-[2/3] rounded-lg overflow-hidden bg-bg-2 ${own ? 'ring-2 ring-lb-green' : ''}`}>
@@ -492,18 +545,28 @@ function Variants({ comic, detail, onZoom }: { comic: ComicLite; detail: ComicDe
                 </button>
                 {v.ratio ? (
                   <span className="absolute top-1 left-1 rounded bg-lb-orange/90 text-bg-0 px-1 text-[9px] font-extrabold">{v.ratio}</span>
+                ) : v.custom ? (
+                  <span className="absolute top-1 left-1 rounded bg-black/70 text-ink-0 px-1 text-[9px] font-extrabold">PHOTO</span>
                 ) : null}
               </div>
               <div className="text-[10px] text-ink-1 mt-1 leading-tight line-clamp-2">{v.name}</div>
             </div>
           );
         })}
+        <button onClick={() => (a.requireLogin() ? setAdding(true) : undefined)} className="min-w-0 text-left">
+          <div className="aspect-[2/3] rounded-lg border border-dashed border-white/25 flex flex-col items-center justify-center gap-1.5 text-ink-2 px-2 text-center">
+            <Icon name="camera" size={22} />
+            <span className="text-[11px] font-semibold leading-tight">Cover not listed?</span>
+          </div>
+          <div className="text-[10px] text-ink-2 mt-1 leading-tight">Add yours from a photo</div>
+        </button>
       </div>
+      {adding ? <AddCoverSheet comic={comic} onClose={() => setAdding(false)} /> : null}
     </div>
   );
 }
 
-function Reviews({ comic, detail }: { comic: ComicLite; detail: ComicDetail | null }) {
+function Reviews({ comic, detail, loading }: { comic: ComicLite; detail: ComicDetail | null; loading: boolean }) {
   useProfiles();
   const a = useActions();
   const entry = useEntry(comic.id);
@@ -635,7 +698,7 @@ function Reviews({ comic, detail }: { comic: ComicLite; detail: ComicDetail | nu
 
       <div>
         <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold mb-2">Community</div>
-        {!detail ? (
+        {!detail || (loading && !community.length) ? (
           <div className="space-y-2">
             <div className="h-16 rounded-xl skeleton" />
             <div className="h-16 rounded-xl skeleton" />
@@ -700,12 +763,39 @@ function ReviewCard({ r }: { r: Review }) {
   );
 }
 
-function Zoom({ src, title, onClose }: { src: string | null; title: string; onClose: () => void }) {
+function Zoom({ src, title, comicId, variant, onClose }: { src: string | null; title: string; comicId: string; variant?: Variant; onClose: () => void }) {
   useBackLayer(onClose);
+  const a = useActions();
+  const mine = !!variant?.custom && !!a.selfId && variant.by === a.selfId;
+  const remove = async () => {
+    if (!variant) return;
+    try {
+      await removeCustomCover(comicId, variant);
+      const e = collection.entry(comicId);
+      if (e?.variants.some((x) => x.id === variant.id)) await collection.patch(e.meta, { variants: e.variants.filter((x) => x.id !== variant.id), owned: true });
+      coversChanged.emit(comicId);
+      toast('Photo removed');
+      onClose();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  };
   return (
     <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 fade-in" onClick={onClose}>
       <img src={src ?? ''} alt={title} referrerPolicy="no-referrer" className="max-w-full max-h-[80vh] rounded-lg shadow-2xl object-contain pop-in" />
       <div className="text-sm text-ink-1 mt-4 text-center px-6">{title}</div>
+      {variant?.custom ? <div className="text-[11px] text-ink-2 mt-1">Collector photo{mine ? ' · added by you' : ''}</div> : null}
+      {mine ? (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            void remove();
+          }}
+          className="mt-4 px-4 py-2 rounded-xl bg-white/10 text-sm font-semibold text-red-300"
+        >
+          Remove my photo
+        </button>
+      ) : null}
     </div>
   );
 }

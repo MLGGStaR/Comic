@@ -67,17 +67,49 @@ export function shelfView(entries: Entry[], o: ShelfOpts): Entry[] {
 }
 
 export type ValueBasis = 'yours' | 'market' | 'cover';
+export interface Worth {
+  amount: number | null;
+  basis: ValueBasis | null;
+  /** owned, but which cover (1st print? variant? later printing?) isn't picked yet */
+  unpicked?: true;
+}
 
-/** What one owned comic is worth: your value › market estimate › cover price × copies. */
-export function valueOf(e: Entry): { amount: number | null; basis: ValueBasis | null } {
+const cents = (n: number) => Math.round(n * 100) / 100;
+
+/** What one owned comic is worth, decided by the covers you picked: your value ›
+ *  their market estimate › their cover prices. With no cover picked we can't
+ *  know which copy it is, so it counts at cover price and is flagged. */
+export function valueOf(e: Entry): Worth {
   if (!e.owned) return { amount: null, basis: null };
   if (e.value != null) return { amount: e.value, basis: 'yours' };
-  if (e.est != null) return { amount: e.est, basis: 'market' };
-  if (e.meta.price != null) {
-    const copies = Math.max(1, e.variants.length);
-    return { amount: Math.round(e.meta.price * copies * 100) / 100, basis: 'cover' };
+  if (!e.variants.length) {
+    return e.meta.price != null ? { amount: e.meta.price, basis: 'cover', unpicked: true } : { amount: null, basis: null, unpicked: true };
   }
-  return { amount: null, basis: null };
+  if (e.est != null) return { amount: e.est, basis: 'market' };
+  const known = e.variants.map((v) => v.price ?? e.meta.price).filter((p): p is number => p != null);
+  return known.length ? { amount: cents(known.reduce((s, p) => s + p, 0)), basis: 'cover' } : { amount: null, basis: null };
+}
+
+export type PriceLookup = (c: ComicLite, variantName: string | null) => Promise<{ raw: number | null } | null>;
+
+/** Market value of the covers you picked: each at its own listing, a cover with
+ *  no listing (or a collector photo) at its cover price. null when no cover is
+ *  picked or none of them is listed. */
+export async function estimateCopies(e: Entry, price: PriceLookup): Promise<number | null> {
+  if (!e.variants.length) return null;
+  let sum = 0;
+  let listed = false;
+  for (const v of e.variants) {
+    const custom = v.id.startsWith('custom:');
+    const p = custom ? null : await price(e.meta, v.id === e.comicId ? null : v.name).catch(() => null);
+    if (p?.raw != null) {
+      sum += p.raw;
+      listed = true;
+    } else {
+      sum += v.price ?? e.meta.price ?? 0;
+    }
+  }
+  return listed ? cents(sum) : null;
 }
 
 export function portfolio(entries: Entry[]) {
@@ -87,11 +119,13 @@ export function portfolio(entries: Entry[]) {
   const basis = { yours: 0, market: 0, cover: 0, none: 0 };
   const pubs = new Map<string, { publisher: string; value: number; count: number }>();
   const valued: { e: Entry; amount: number }[] = [];
+  const unpicked: Entry[] = [];
   for (const e of entries) {
     if (!e.owned) continue;
     owned++;
     if (e.paid != null) paid += e.paid;
     const v = valueOf(e);
+    if (v.unpicked) unpicked.push(e);
     if (v.basis) basis[v.basis]++;
     else basis.none++;
     const amount = v.amount ?? 0;
@@ -110,5 +144,6 @@ export function portfolio(entries: Entry[]) {
     basis,
     byPublisher: [...pubs.values()].sort((a, b) => b.value - a.value || b.count - a.count),
     top: valued.sort((a, b) => b.amount - a.amount).map((x) => x.e),
+    unpicked,
   };
 }

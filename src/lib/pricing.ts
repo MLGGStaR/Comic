@@ -49,6 +49,8 @@ export function pickProduct(
   const sameVol = cands.filter((x) => yearDist(x.n.year) === bestYear);
 
   if (want.variantName) {
+    // a variant only ever gets its own listing — the main cover's price would
+    // value a $5 variant (or a later printing) like the 1st print
     const vw = words(want.variantName);
     const tagged = sameVol
       .filter((x) => x.n.tag)
@@ -59,7 +61,7 @@ export function pickProduct(
       })
       .filter((t) => t.score >= 0.5)
       .sort((a, b) => b.score - a.score);
-    if (tagged.length) return tagged[0].x.p;
+    return tagged[0]?.x.p ?? null;
   }
   return (sameVol.find((x) => !x.n.tag) ?? null)?.p ?? null;
 }

@@ -1,17 +1,20 @@
 // Full-screen scanner. Barcode: live decode (UPC + 5-digit add-on / ISBN),
 // optional "stack mode" that adds every scan to your collection. Cover: snap
-// the front of the book → Claude reads it → exact issue + variant.
+// the front of the book → a barcode in the shot is read on the phone (exact,
+// instant); otherwise Claude matches the photo against every cover of the
+// issue → exact issue + cover, with the runner-ups one tap away.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type UpcMatch } from '../api/client';
+import { api, type ScanAlt, type UpcMatch } from '../api/client';
 import type { Barcode } from '../lib/barcode';
 import { bestCode } from './readerOptions';
 import { useBackLayer } from '../lib/backstack';
 import { collection, useEntry } from '../state/collection';
 import { useActions } from '../state/actions';
-import type { ComicLite } from '../types';
+import type { ComicLite, OwnedVariant } from '../types';
 import { Cover } from '../ui/Cover';
 import { Icon } from '../ui/Icon';
 import { StatusToggles } from '../ui/StatusToggles';
+import { AddCoverSheet } from '../ui/CoverPicker';
 import { toast } from '../ui/toast';
 import { fmtDate } from '../lib/format';
 import { openRearCamera, stopStream, torchSupported, setTorch, grabFrame, guideToFrame, canvasToBase64, fileToJpegBase64 } from './camera';
@@ -23,8 +26,24 @@ interface Found {
   match: UpcMatch;
   via: 'barcode' | 'cover';
   code?: string;
-  photo?: string; // data URL of the captured cover
+  photo?: string; // jpeg base64 of the captured cover
   read?: { series?: string; issue?: string; publisher?: string; variant?: string };
+}
+
+/** A barcode (with its add-on / ISBN) in a still photo, read on the phone. */
+async function codeInPhoto(b64: string): Promise<string | null> {
+  try {
+    const bmp = await createImageBitmap(await (await fetch(`data:image/jpeg;base64,${b64}`)).blob());
+    const c = document.createElement('canvas');
+    c.width = bmp.width;
+    c.height = bmp.height;
+    c.getContext('2d')!.drawImage(bmp, 0, 0);
+    const bc = bestCode(await decodeFrame(c));
+    if (!bc) return null;
+    return bc.kind === 'upc' ? `${bc.upc}${bc.addon ?? ''}` : bc.isbn;
+  } catch {
+    return null;
+  }
 }
 
 export function Scanner({ mode, onMode, onClose }: { mode: Mode; onMode: (m: Mode) => void; onClose: () => void }) {
@@ -89,7 +108,8 @@ export function Scanner({ mode, onMode, onClose }: { mode: Mode; onMode: (m: Mod
           return;
         }
         if (stack && match.comic) {
-          await collection.patch(match.comic, match.variantId ? { variants: variantList(match) } : { owned: true });
+          // a barcode names the exact cover: log that one
+          await collection.patch(match.comic, { variants: variantList(match) });
           setAdded((n) => n + 1);
           toast(`Added ${match.comic.title}`);
           window.setTimeout(() => (pausedRef.current = false), 1200);
@@ -150,16 +170,27 @@ export function Scanner({ mode, onMode, onClose }: { mode: Mode; onMode: (m: Mod
     };
   }, [mode, ready, found, stack, resolveCode]);
 
-  const identifyPhoto = async (base64: string, dataUrl: string) => {
+  const identifyPhoto = async (base64: string) => {
     setBusy('Reading the cover…');
     setMiss(null);
     try {
-      const res = await api.scan(base64);
+      // the barcode printed on the cover names the exact issue and cover
+      const code = await codeInPhoto(base64);
+      if (code) {
+        const hit = await api.upc(code).catch(() => null);
+        if (hit?.comic) {
+          navigator.vibrate?.(30);
+          setFound({ match: { ...hit, matched: true }, via: 'barcode', code, photo: base64 });
+          return;
+        }
+      }
+      setBusy('Matching the cover…');
+      const res = await api.scan(base64, code);
       if (!res.comic && !res.candidates.length) {
-        setMiss('Couldn’t match that cover. Try again straight-on, with the title visible — or scan the barcode.');
+        setMiss(res.note && res.note !== 'Couldn’t match this cover' ? res.note : 'Couldn’t match that cover. Try again straight-on with the title visible, or scan the barcode.');
         return;
       }
-      setFound({ match: res, via: 'cover', photo: dataUrl, read: res.read });
+      setFound({ match: res, via: res.via ?? 'cover', photo: base64, read: res.read });
     } catch (e) {
       setMiss((e as Error).message);
     } finally {
@@ -173,14 +204,12 @@ export function Scanner({ mode, onMode, onClose }: { mode: Mode; onMode: (m: Mod
     if (!v || !g || !v.videoWidth) return;
     navigator.vibrate?.(15);
     const canvas = grabFrame(v, guideToFrame(v, g.getBoundingClientRect()), 1280);
-    const b64 = canvasToBase64(canvas);
-    await identifyPhoto(b64, `data:image/jpeg;base64,${b64}`);
+    await identifyPhoto(canvasToBase64(canvas));
   };
 
   const pickFile = async (f: File | undefined) => {
     if (!f) return;
-    const b64 = await fileToJpegBase64(f);
-    await identifyPhoto(b64, `data:image/jpeg;base64,${b64}`);
+    await identifyPhoto(await fileToJpegBase64(f));
   };
 
   const again = () => {
@@ -307,57 +336,108 @@ export function Scanner({ mode, onMode, onClose }: { mode: Mode; onMode: (m: Mod
   );
 }
 
-function variantList(match: UpcMatch) {
-  const c = match.comic!;
-  if (!match.variantId || match.variantId === c.id) return [{ id: c.id, name: 'Main cover', cover: c.cover }];
-  const cur = collection.entry(c.id)?.variants ?? [];
-  if (cur.some((v) => v.id === match.variantId)) return cur;
-  const name = match.note ?? 'Variant cover';
-  return [...cur, { id: match.variantId, name, cover: match.variantCover ?? null }];
+/** The exact cover a match names, as a collection entry would log it. */
+function coverOf(match: { comic: ComicLite | null; variantId?: string | null; variantCover?: string | null; note?: string | null }): OwnedVariant | null {
+  const c = match.comic;
+  if (!c) return null;
+  if (!match.variantId || match.variantId === c.id) return { id: c.id, name: 'Main cover', cover: c.cover, price: c.price };
+  return { id: match.variantId, name: match.note ?? 'Variant cover', cover: match.variantCover ?? null };
+}
+
+/** Your covers of this comic plus the one just scanned (nothing you logged is dropped). */
+function variantList(match: UpcMatch): OwnedVariant[] {
+  const v = coverOf(match)!;
+  const cur = collection.entry(match.comic!.id)?.variants ?? [];
+  return cur.some((x) => x.id === v.id) ? cur : [...cur, v];
+}
+
+interface Pick {
+  comic: ComicLite;
+  variantId: string | null;
+  variantCover: string | null;
+  note: string | null;
 }
 
 function ResultSheet({ found, onAgain, onDone }: { found: Found; onAgain: () => void; onDone: () => void }) {
   const a = useActions();
-  const [pick, setPick] = useState<ComicLite | null>(found.match.comic);
-  const entry = useEntry(pick?.id);
-  const alts = found.match.candidates.filter((c) => c.id !== pick?.id).slice(0, 8);
-  const isVariant = pick && found.match.comic && pick.id === found.match.comic.id && found.match.variantId && found.match.variantId !== pick.id;
+  const m = found.match;
+  const first: Pick | null = m.comic ? { comic: m.comic, variantId: m.variantId ?? null, variantCover: m.variantCover ?? null, note: m.note ?? null } : null;
+  const [pick, setPick] = useState<Pick | null>(first);
+  const [adding, setAdding] = useState(false);
+  const entry = useEntry(pick?.comic.id);
+  const cover = pick ? coverOf(pick) : null;
+  const isVariant = !!pick?.variantId && pick.variantId !== pick.comic.id;
+  const notListed = found.via === 'cover' && m.matched === false && !(m.alternatives ?? []).length && !!m.comic;
+  const unsure = found.via === 'cover' && m.matched === false && !notListed;
+  const haveIt = !!cover && !!entry?.variants.some((v) => v.id === cover.id);
+
+  // every cover the scanner weighed (the pick included), then other issues
+  const covers: Pick[] = first ? [first, ...(m.alternatives ?? []).map((x: ScanAlt) => ({ ...x }))] : [];
+  const issues = m.candidates.filter((c) => c.id !== pick?.comic.id).slice(0, 8);
+  const same = (x: Pick) => !!pick && x.comic.id === pick.comic.id && (x.variantId ?? null) === (pick.variantId ?? null);
 
   return (
-    <div className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-bg-1 border-t border-white/10 p-5 sheet-up max-h-[78vh] overflow-y-auto" style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}>
+    <div className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-bg-1 border-t border-white/10 p-5 sheet-up max-h-[80vh] overflow-y-auto" style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}>
       <div className="mx-auto -mt-1 mb-4 h-1 w-9 rounded-full bg-white/20" />
       {pick ? (
         <>
           <div className="flex gap-4">
             <div className="w-24 aspect-[2/3] rounded-lg overflow-hidden bg-bg-2 flex-shrink-0 shadow-lg relative">
-              <Cover src={isVariant ? found.match.variantCover ?? pick.cover : pick.cover} alt={pick.title} className="w-full h-full" eager />
+              <Cover src={pick.variantCover ?? pick.comic.cover} alt={pick.comic.title} className="w-full h-full" eager />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-[10px] uppercase tracking-[0.16em] font-bold text-lb-green">
-                {found.via === 'barcode' ? 'Barcode match' : 'Cover match'}
-                {found.match.confidence != null && found.match.confidence < 0.7 ? <span className="text-amber-300"> · check it</span> : null}
+              <div className={`text-[10px] uppercase tracking-[0.16em] font-bold ${unsure || notListed ? 'text-amber-300' : 'text-lb-green'}`}>
+                {found.via === 'barcode' ? 'Barcode match' : notListed ? 'Issue found · cover not listed' : unsure ? 'Best guess · check the cover' : 'Cover match'}
               </div>
-              <div className="font-display text-xl font-extrabold leading-tight mt-1">{pick.title}</div>
-              <div className="text-xs text-ink-2 mt-1">{[pick.publisher, fmtDate(pick.releaseDate, { year: true })].filter(Boolean).join(' · ')}</div>
-              {isVariant && found.match.note ? <div className="text-xs text-lb-orange mt-1">{found.match.note}</div> : null}
-              {entry?.owned ? <div className="text-xs text-lb-green font-semibold mt-1.5">Already in your collection</div> : null}
+              <div className="font-display text-xl font-extrabold leading-tight mt-1">{pick.comic.title}</div>
+              <div className="text-xs text-ink-2 mt-1">{[pick.comic.publisher, fmtDate(pick.comic.releaseDate, { year: true })].filter(Boolean).join(' · ')}</div>
+              <div className={`text-xs mt-1 ${isVariant ? 'text-lb-orange' : 'text-ink-1'}`}>{isVariant ? pick.note ?? 'Variant cover' : 'Main cover'}</div>
+              {haveIt ? <div className="text-xs text-lb-green font-semibold mt-1.5">This cover is in your collection</div> : entry?.owned ? <div className="text-xs text-ink-2 mt-1.5">You have another cover of this</div> : null}
             </div>
           </div>
+
+          {covers.length > 1 ? (
+            <div className="mt-4">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold mb-2">{unsure ? 'Which one is yours?' : 'Or one of these covers'}</div>
+              <div className="flex gap-2 overflow-x-auto -mx-5 px-5 pb-1">
+                {covers.map((x) => (
+                  <button key={`${x.comic.id}:${x.variantId ?? ''}`} onClick={() => setPick(x)} className="w-[68px] flex-shrink-0 text-left">
+                    <div className={`aspect-[2/3] rounded-md overflow-hidden bg-bg-2 ${same(x) ? 'ring-2 ring-lb-green' : 'opacity-80'}`}>
+                      <Cover src={x.variantCover ?? x.comic.cover} alt={x.note ?? x.comic.title} className="w-full h-full" />
+                    </div>
+                    <div className="text-[9.5px] text-ink-1 mt-1 line-clamp-2 leading-tight">
+                      {x.comic.id !== first?.comic.id ? `${x.comic.title} · ` : ''}
+                      {x.variantId ? x.note ?? 'Variant' : 'Main cover'}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="mt-4">
-            {isVariant ? (
+            <StatusToggles comic={pick.comic} haveCover={cover} />
+            {entry?.owned && !haveIt && cover ? (
               <button
                 onClick={() => {
                   if (!a.requireLogin()) return;
-                  void collection.patch(pick, { variants: variantList(found.match) });
-                  toast(`Logged ${found.match.note ?? 'variant'}`);
+                  void collection.patch(pick.comic, { variants: variantList({ ...m, comic: pick.comic, variantId: pick.variantId, variantCover: pick.variantCover, note: pick.note }) });
+                  toast(`Logged ${cover.name}`);
                 }}
-                className="w-full mb-2 py-2.5 rounded-xl bg-lb-green/15 text-lb-green text-sm font-bold"
+                className="w-full mt-2 py-2.5 rounded-xl bg-lb-green/15 text-lb-green text-sm font-bold"
               >
-                I have this cover
+                I have this cover too
               </button>
             ) : null}
-            <StatusToggles comic={pick} />
           </div>
+
+          {found.photo && found.via === 'cover' ? (
+            <button onClick={() => (a.requireLogin() ? setAdding(true) : undefined)} className="w-full mt-2 py-2.5 rounded-xl bg-bg-2 text-[13px] font-semibold text-ink-1 flex items-center justify-center gap-2">
+              <Icon name="camera" size={16} />
+              {notListed ? 'Add my photo as this cover' : 'Mine isn’t listed — add my photo'}
+            </button>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-2 mt-3">
             <button onClick={onAgain} className="py-3 rounded-xl bg-bg-2 text-sm font-semibold">
               Scan another
@@ -365,7 +445,7 @@ function ResultSheet({ found, onAgain, onDone }: { found: Found; onAgain: () => 
             <button
               onClick={() => {
                 onDone();
-                window.setTimeout(() => a.openComic(pick), 80);
+                window.setTimeout(() => a.openComic(pick.comic), 80);
               }}
               className="py-3 rounded-xl bg-bg-2 text-sm font-semibold text-lb-blue"
             >
@@ -374,18 +454,18 @@ function ResultSheet({ found, onAgain, onDone }: { found: Found; onAgain: () => 
           </div>
         </>
       ) : (
-        <div className="text-sm text-ink-1 mb-3">Which one is it?</div>
+        <div className="text-sm text-ink-1 mb-3">{m.note ?? 'Which one is it?'}</div>
       )}
-      {alts.length ? (
+      {issues.length ? (
         <div className="mt-5">
-          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold mb-2">{pick ? 'Not it? Close matches' : 'Close matches'}</div>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink-2 font-semibold mb-2">{pick ? 'Other issues it could be' : 'Close matches'}</div>
           <div className="flex gap-2 overflow-x-auto -mx-5 px-5 pb-1">
-            {alts.map((c) => (
-              <button key={c.id} onClick={() => setPick(c)} className="w-[72px] flex-shrink-0 text-left">
+            {issues.map((c) => (
+              <button key={c.id} onClick={() => setPick({ comic: c, variantId: null, variantCover: null, note: null })} className="w-[68px] flex-shrink-0 text-left">
                 <div className="aspect-[2/3] rounded-md overflow-hidden bg-bg-2">
                   <Cover src={c.cover} alt={c.title} className="w-full h-full" />
                 </div>
-                <div className="text-[10px] text-ink-1 mt-1 line-clamp-2 leading-tight">{c.title}</div>
+                <div className="text-[9.5px] text-ink-1 mt-1 line-clamp-2 leading-tight">{c.title}</div>
               </button>
             ))}
           </div>
@@ -393,10 +473,11 @@ function ResultSheet({ found, onAgain, onDone }: { found: Found; onAgain: () => 
       ) : null}
       {found.photo ? (
         <div className="mt-4 flex items-center gap-2 text-[11px] text-ink-2">
-          <img src={found.photo} alt="" className="w-8 h-12 object-cover rounded" />
+          <img src={`data:image/jpeg;base64,${found.photo}`} alt="" className="w-8 h-12 object-cover rounded" />
           Your photo{found.read?.series ? ` · read as “${[found.read.series, found.read.issue ? `#${found.read.issue}` : ''].join(' ').trim()}”` : ''}
         </div>
       ) : null}
+      {adding && pick ? <AddCoverSheet comic={pick.comic} photo={found.photo} suggestedName={found.read?.variant ?? null} onClose={() => setAdding(false)} /> : null}
     </div>
   );
 }

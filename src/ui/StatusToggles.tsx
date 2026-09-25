@@ -1,11 +1,12 @@
 // The three collection switches, used by the quick-log sheet and the comic
 // page. Owning clears the wishlist; the wishlist is hidden while you own it.
-import type { ComicLite } from '../types';
+// `haveCover`: the exact cover in hand (a scan found it) — "Have it" logs it.
+import type { ComicLite, OwnedVariant } from '../types';
 import { collection, useEntry } from '../state/collection';
 import { useActions } from '../state/actions';
 import { Icon, type IconName } from './Icon';
 
-export function StatusToggles({ comic, size = 'md' }: { comic: ComicLite; size?: 'md' | 'lg' }) {
+export function StatusToggles({ comic, size = 'md', haveCover }: { comic: ComicLite; size?: 'md' | 'lg'; haveCover?: OwnedVariant | null }) {
   const entry = useEntry(comic.id);
   const a = useActions();
   const owned = !!entry?.owned;
@@ -16,6 +17,11 @@ export function StatusToggles({ comic, size = 'md' }: { comic: ComicLite; size?:
     navigator.vibrate?.(8);
     void collection.patch(comic, patch);
   };
+  const have = () => {
+    if (owned || !haveCover) return toggle({ owned: !owned });
+    const cur = entry?.variants ?? [];
+    toggle({ variants: cur.some((v) => v.id === haveCover.id) ? cur : [...cur, haveCover] });
+  };
   return (
     <div className="grid grid-cols-3 gap-2">
       <Toggle
@@ -24,7 +30,7 @@ export function StatusToggles({ comic, size = 'md' }: { comic: ComicLite; size?:
         label={owned ? 'Have it' : 'Have it'}
         tone="green"
         size={size}
-        onClick={() => toggle({ owned: !owned })}
+        onClick={have}
       />
       <Toggle on={read} icon="book" label="Read" tone="blue" size={size} onClick={() => toggle({ read: !read })} />
       <Toggle

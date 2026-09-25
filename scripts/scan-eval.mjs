@@ -2,7 +2,9 @@
 // (main + variants of popular issues, older keys, FOMO editions), renders each
 // as a phone-style photo (angle, glare, background, blur), runs the live scan
 // and scores issue-level and cover-level accuracy. Report → scripts/smoke-out/scan-eval.json
-// usage: node scripts/scan-eval.mjs [--quick]
+// usage: node scripts/scan-eval.mjs [--quick] [--reuse] [--only <text>] [--knobs '{"coarseModel":"claude-sonnet-5"}'] [--tag name]
+//   --reuse  keep photos rendered by an earlier run   --only  cases whose label contains <text>
+//   --knobs  per-pass model / inline overrides (debug only)   --tag  report name suffix
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -17,6 +19,14 @@ const H = { apikey: SVC, Authorization: `Bearer ${SVC}`, 'Content-Type': 'applic
 const OUT = path.resolve('scripts/smoke-out/scan-eval');
 fs.mkdirSync(OUT, { recursive: true });
 const quick = process.argv.includes('--quick');
+const reuse = process.argv.includes('--reuse');
+const arg = (k) => {
+  const i = process.argv.indexOf(k);
+  return i > 0 ? process.argv[i + 1] : null;
+};
+const only = arg('--only')?.toLowerCase() ?? null;
+const knobs = arg('--knobs') ? JSON.parse(arg('--knobs')) : undefined;
+const reportTag = arg('--tag') ?? '';
 
 const api = async (params) =>
   (await fetch(`${FN}?${new URLSearchParams(params)}`, { headers: { apikey: ANON, Authorization: `Bearer ${ANON}` } })).json();
@@ -63,7 +73,8 @@ for (const [id, t, dcIssueQ] of [
   const dc = s.top?.kind === 'comic' ? s.top.comic.id : null;
   cases.push({ label: t, coverId: id, expectIssue: id, alsoIssue: dc, expectVariant: null });
 }
-console.log(`${cases.length} cases`);
+if (only) cases.splice(0, cases.length, ...cases.filter((c) => only.split('|').some((o) => c.label.toLowerCase().includes(o))));
+console.log(`${cases.length} cases${knobs ? ` · knobs ${JSON.stringify(knobs)}` : ''}`);
 
 // ── 2) phone-style photos ─────────────────────────────────────────────────
 const browser = await chromium.launch();
@@ -73,6 +84,8 @@ const rnd = (i, k) => {
   return x - Math.floor(x);
 };
 for (const [i, c] of cases.entries()) {
+  c.photo = path.join(OUT, `cover-${c.coverId}.jpg`);
+  if (reuse && fs.existsSync(c.photo)) continue;
   const rz = (rnd(i, 1) - 0.5) * 16;
   const ry = (rnd(i, 2) - 0.5) * 24;
   const rx = (rnd(i, 3) - 0.5) * 16;
@@ -88,7 +101,6 @@ for (const [i, c] of cases.entries()) {
     </div></body>`);
   await page.waitForFunction(() => document.images[0]?.complete, null, { timeout: 15000 }).catch(() => {});
   await page.waitForTimeout(300);
-  c.photo = path.join(OUT, `case-${String(i).padStart(2, '0')}.jpg`);
   await page.screenshot({ path: c.photo, type: 'jpeg', quality: 80 });
 }
 await browser.close();
@@ -106,7 +118,7 @@ try {
     const r = await fetch(`${FN}?op=scan`, {
       method: 'POST',
       headers: { apikey: ANON, Authorization: `Bearer ${tok.access_token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: fs.readFileSync(c.photo).toString('base64'), debug: true }),
+      body: JSON.stringify({ image: fs.readFileSync(c.photo).toString('base64'), debug: true, knobs }),
     });
     const j = await r.json().catch(() => ({}));
     const gotIssue = j.comic?.id ?? null;
@@ -115,11 +127,14 @@ try {
     const coverOk = issueOk && gotVariant === c.expectVariant;
     const row = { ...c, ms: Date.now() - t0, status: r.status, gotIssue, gotTitle: j.comic?.title ?? null, gotVariant, note: j.note ?? null, confidence: j.confidence ?? null, issueOk, coverOk, debug: j._debug ?? null, error: j.error ?? null };
     results.push(row);
-    console.log(`${coverOk ? 'OK  ' : issueOk ? 'ISS ' : 'MISS'} ${c.label.padEnd(58)} → ${row.gotTitle ?? '-'}${row.note ? ` [${row.note}]` : ''} (${Math.round(row.ms / 1000)}s)`);
+    const stages = Object.entries(row.debug?.ms ?? {})
+      .map(([k, v]) => `${k} ${(v / 1000).toFixed(1)}`)
+      .join(' · ');
+    console.log(`${coverOk ? 'OK  ' : issueOk ? 'ISS ' : 'MISS'} ${c.label.padEnd(58)} → ${row.gotTitle ?? '-'}${row.note ? ` [${row.note}]` : ''} (${Math.round(row.ms / 1000)}s: ${stages})`);
   };
   const queue = [...cases];
   await Promise.all(
-    [0, 1].map(async () => {
+    [0, 1, 2].map(async () => {
       while (queue.length) await run(queue.shift());
     }),
   );
@@ -130,5 +145,9 @@ try {
 const n = results.length;
 const issue = results.filter((r) => r.issueOk).length;
 const cover = results.filter((r) => r.coverOk).length;
-console.log(`\nissue correct ${issue}/${n} (${Math.round((issue / n) * 100)}%) · exact cover ${cover}/${n} (${Math.round((cover / n) * 100)}%)`);
-fs.writeFileSync(path.join(OUT, '..', 'scan-eval.json'), JSON.stringify(results, null, 2));
+const secs = results.map((r) => r.ms / 1000).sort((a, b) => a - b);
+const median = secs[Math.floor(secs.length / 2)] ?? 0;
+console.log(
+  `\nissue correct ${issue}/${n} (${Math.round((issue / n) * 100)}%) · exact cover ${cover}/${n} (${Math.round((cover / n) * 100)}%) · median ${median.toFixed(1)}s · max ${(secs.at(-1) ?? 0).toFixed(1)}s`,
+);
+fs.writeFileSync(path.join(OUT, '..', `scan-eval${reportTag ? `-${reportTag}` : ''}.json`), JSON.stringify(results, null, 2));
