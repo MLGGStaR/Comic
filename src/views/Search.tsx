@@ -32,7 +32,6 @@ export function SearchView() {
   const [res, setRes] = useState<SearchResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [showMore, setShowMore] = useState(false);
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const seq = useRef(0);
 
@@ -40,7 +39,6 @@ export function SearchView() {
 
   useEffect(() => {
     const query = q.trim();
-    setShowMore(false);
     if (query.length < 2) {
       setRes(null);
       setErr(null);
@@ -144,18 +142,10 @@ export function SearchView() {
             <Empty title="No match">Try the series name plus an issue number, like “saga #1”, or “vol 1” for a trade.</Empty>
           )}
           {res.more.length ? (
-            <div className="mt-5">
-              {!showMore ? (
-                <button onClick={() => setShowMore(true)} className="w-full py-2.5 rounded-xl bg-bg-1 text-xs font-semibold text-ink-1">
-                  Not it? {res.more.length} other match{res.more.length === 1 ? '' : 'es'}
-                </button>
-              ) : (
-                <div className="space-y-1.5 fade-in">
-                  {res.more.map((h) => (
-                    <MoreRow key={hitKey(h)} hit={h} />
-                  ))}
-                </div>
-              )}
+            <div className="mt-5 space-y-1.5 fade-in">
+              {res.more.map((h) => (
+                <MoreRow key={hitKey(h)} hit={h} />
+              ))}
             </div>
           ) : null}
         </div>

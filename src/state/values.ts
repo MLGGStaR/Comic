@@ -11,10 +11,14 @@ const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
 export async function estimateFor(e: Entry): Promise<number | null> {
-  const copies = e.variants.length ? e.variants : [null];
+  // Only look up market prices if specific variants are tracked.
+  // Without variant info, we can't know which copy the user owns (1st print vs reprint, etc)
+  // so we skip market pricing and fall back to cover price.
+  if (!e.variants.length) return null;
+
   let sum = 0;
   let any = false;
-  for (const v of copies) {
+  for (const v of e.variants) {
     const isMain = !v || v.id === e.comicId;
     const p = await priceFor(e.meta, isMain ? null : v.name).catch(() => null);
     const each = p?.raw ?? (isMain ? null : (await priceFor(e.meta).catch(() => null))?.raw ?? null);
