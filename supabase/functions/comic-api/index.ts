@@ -243,9 +243,19 @@ async function coversOf(issue: Lite): Promise<Cand[]> {
   return [
     { ...base, id: issue.id, name: `${issue.title} — Main cover`, cover: core.cover ?? issue.cover, main: true, variantName: null },
     ...core.variants.map((v) => ({ ...base, id: v.id, name: `${issue.title} — ${v.name}`, cover: v.cover, main: false, variantName: v.name })),
-    ...custom.map((c) => ({ ...base, id: `custom:${c.id}`, name: `${issue.title} — ${c.name} (collector photo)`, cover: c.image_url, main: false, variantName: c.name })),
+    ...custom.map((c) => customCand(issue, c)),
   ];
 }
+
+const customCand = (issue: Lite, c: { id: string; name: string; image_url: string }): Cand => ({
+  issueId: issue.id,
+  lite: issue,
+  id: `custom:${c.id}`,
+  name: `${issue.title} — ${c.name} (collector photo)`,
+  cover: c.image_url,
+  main: false,
+  variantName: c.name,
+});
 
 /** Main covers of the run, nearest issue numbers first (catches misread numbers). */
 async function runMains(issue: Lite, max: number, skipSelf = true): Promise<Cand[]> {
@@ -353,8 +363,11 @@ async function scanCover(image: string, opts: { debug: boolean; upc: string | nu
   const primary = issues[0] ?? null;
   if (primary) {
     const own = byHints(await coversOf(primary), [read.variant_hint, read.cover_artist].filter(Boolean).join(' ')) as Cand[];
+    // collector photos of the runner-up issue too: a regional edition (FOMO
+    // Books) and the US issue are listed separately, and a photo may be on either
+    const other = issues[1] ? (await customCoversFor([issues[1].id])).map((c) => customCand(issues[1], c)) : [];
     const near = await runMains(primary, 4);
-    cands = [...own, ...near];
+    cands = [...own, ...other, ...near];
   } else {
     // no number: the run's recent main covers, plus every cover of its newest
     // issues (store-exclusive virgin covers are usually of recent books)
@@ -370,6 +383,7 @@ async function scanCover(image: string, opts: { debug: boolean; upc: string | nu
   }
   const withArt = cands.filter((c) => c.cover);
   dbg.candidates = withArt.length;
+  dbg.custom = withArt.filter((c) => c.id.startsWith('custom:')).map((c) => c.name);
   lap('candidates');
 
   // 4) coarse: every candidate as a thumbnail → top 3
