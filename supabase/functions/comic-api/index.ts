@@ -219,11 +219,11 @@ async function scanCover(image: string, debug = false) {
     publisher: read.publisher ?? undefined,
     variant: read.variant_hint ?? read.cover_artist ?? undefined,
   };
-  if (!read.is_comic || !read.series) return { comic: null, candidates: [], read: readOut, note: ‘That doesn’t look like a comic cover’ };
+  if (!read.is_comic || !read.series) return { comic: null, candidates: [], read: readOut, note: 'That doesn’t look like a comic cover' };
 
   // Reject low-confidence reads: if we’re unsure about the series or number, the search will be wrong
   if (read.confidence < 0.5) {
-    return { comic: null, candidates: [], read: readOut, note: ‘Could not read the comic clearly — try a better photo.’ };
+    return { comic: null, candidates: [], read: readOut, note: 'Could not read the comic clearly — try a better photo.' };
   }
 
   const q =

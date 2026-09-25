@@ -228,17 +228,7 @@ function Shell() {
 
   // lock the page behind pushed screens so it can't scroll underneath
   useEffect(() => {
-    if (nav.stack.length) {
-      document.documentElement.style.overflow = 'hidden';
-      // also prevent any pointer events on the page behind the screens
-      document.documentElement.style.pointerEvents = 'none';
-      // but allow pointer events on the screens themselves (z-40+)
-      const screens = document.querySelectorAll('.screen-in, .z-40, .z-50');
-      screens.forEach((el) => (el as HTMLElement).style.pointerEvents = '');
-    } else {
-      document.documentElement.style.overflow = '';
-      document.documentElement.style.pointerEvents = '';
-    }
+    document.documentElement.style.overflow = nav.stack.length ? 'hidden' : '';
   }, [nav.stack.length]);
 
   const push = nav.push;
@@ -357,7 +347,7 @@ function Shell() {
         </nav>
 
         {nav.stack.map((r, i) => (
-          <RouteLayer key={routeKey(r)} route={r} onClose={() => nav.closeAt(i)} />
+          <RouteLayer key={`${i}-${routeKey(r)}`} route={r} onClose={() => nav.closeAt(i)} />
         ))}
 
         {quick ? <QuickLogSheet comic={quick} onClose={() => setQuick(null)} /> : null}
