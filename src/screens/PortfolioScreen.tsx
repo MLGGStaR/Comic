@@ -44,7 +44,9 @@ export function PortfolioScreen({ userId, onClose }: { userId: string; onClose: 
           <div className="text-[10px] uppercase tracking-[0.16em] text-ink-2 font-semibold">Estimated value{who ? ` · ${who}` : ''}</div>
           <div className="font-display text-[46px] font-extrabold leading-none tracking-tight mt-2">{fmtMoney(p.total)}</div>
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs mt-2">
-            <span className="text-ink-1">{p.owned} comics</span>
+            <span className="text-ink-1">
+              {p.owned} comic{p.owned === 1 ? '' : 's'}
+            </span>
             {gain != null ? (
               <span className={gain >= 0 ? 'text-lb-green' : 'text-red-400'}>
                 {gain >= 0 ? '+' : '−'}
