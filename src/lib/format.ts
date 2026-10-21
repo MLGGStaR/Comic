@@ -1,4 +1,17 @@
 // Display formatting shared across views.
+import type { ComicLite } from '../types';
+
+/** The corner tag on a cover: "#23" for an issue; "Vol. 2" (else TP / HC /
+ *  Omnibus) for a collected edition. */
+export function coverNumber(c: ComicLite): string {
+  if (c.format !== 'collection') return c.number ? `#${c.number}` : '';
+  const vol = c.title.match(/\bvol(?:ume)?\.?\s*(\d+)/i);
+  if (vol) return `Vol. ${vol[1]}`;
+  if (/omnibus/i.test(c.title)) return 'Omnibus';
+  if (/compendium/i.test(c.title)) return 'Compendium';
+  if (/\bHC\b/.test(c.title)) return 'HC';
+  return 'TP';
+}
 
 export function fmtDate(iso: string | null | undefined, opts?: { year?: boolean }): string {
   if (!iso) return '';

@@ -10,10 +10,10 @@ import { useActions } from '../state/actions';
 import { issueCount, shelfView, valueOf, type ShelfSort } from '../lib/shelf';
 import { useCollects } from '../state/collects';
 import { Cover } from '../ui/Cover';
-import { ComicTile } from '../ui/ComicTile';
+import { ComicTile, DateTag, NumberTag } from '../ui/ComicTile';
 import { RatingHistogram } from '../ui/RatingHistogram';
 import { Empty } from '../ui/layout';
-import { fmtMoney, fmtDate } from '../lib/format';
+import { fmtMoney } from '../lib/format';
 import { Icon } from '../ui/Icon';
 import { useGenres, genresOf } from '../state/genres';
 
@@ -269,14 +269,12 @@ export function ShelfScreen({ shelf, userId, onClose }: { shelf: Shelf; userId: 
 }
 
 function ShelfItem({ e, shelf, sort, today }: { e: Entry; shelf: Shelf; sort: ShelfSort; today: string }) {
-  const soon = (e.meta.releaseDate ?? '') > today;
+  const wish = shelf === 'wishlist';
+  // the wishlist shows every release date on the cover, so no "Soon" tag there
+  const soon = !wish && (e.meta.releaseDate ?? '') > today;
   const v = valueOf(e);
   const caption =
-    shelf === 'owned' && sort === 'value' && v.amount != null ? (
-      <span className="text-lb-green font-semibold">{fmtMoney(v.amount)}</span>
-    ) : shelf === 'wishlist' && sort === 'release' && e.meta.releaseDate ? (
-      fmtDate(e.meta.releaseDate)
-    ) : undefined;
+    shelf === 'owned' && sort === 'value' && v.amount != null ? <span className="text-lb-green font-semibold">{fmtMoney(v.amount)}</span> : undefined;
   return (
     <ComicTile
       comic={e.meta}
@@ -284,7 +282,10 @@ function ShelfItem({ e, shelf, sort, today }: { e: Entry; shelf: Shelf; sort: Sh
       label={soon ? 'Soon' : e.variants.length > 1 ? `×${e.variants.length}` : undefined}
       labelTone={soon ? 'orange' : 'dark'}
       caption={caption}
-    />
+    >
+      <NumberTag comic={e.meta} />
+      {wish ? <DateTag iso={e.meta.releaseDate} /> : null}
+    </ComicTile>
   );
 }
 

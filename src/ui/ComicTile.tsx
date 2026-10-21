@@ -6,6 +6,8 @@ import { Cover } from './Cover';
 import { Stars } from './Stars';
 import { usePress } from './press';
 import { Icon } from './Icon';
+import { coverNumber, fmtDate } from '../lib/format';
+import { isoDay } from '../lib/entry';
 
 // A cover you can tap (open) or hold (quick log). Optional: your status
 // badge, stars below, a corner label ("NEW", "3d", "#4").
@@ -62,6 +64,32 @@ export function ComicTile({
       {stars != null ? <Stars value={stars} className="text-center mt-0.5 text-[12px]" /> : null}
       {caption ? <div className="text-[10px] text-ink-1 mt-1 truncate">{caption}</div> : null}
     </button>
+  );
+}
+
+/** "#23" (or "Vol. 2" for a trade) in the cover's top-right corner. */
+export function NumberTag({ comic }: { comic: ComicLite }) {
+  const t = coverNumber(comic);
+  if (!t) return null;
+  return (
+    <span className="absolute top-1 right-1 max-w-[75%] truncate rounded bg-black/75 px-1 py-[1px] text-[10px] font-extrabold leading-tight text-ink-0 tabular-nums shadow">
+      {t}
+    </span>
+  );
+}
+
+/** Release date in the cover's bottom-left corner — blue while it's still to come. */
+export function DateTag({ iso }: { iso: string | null }) {
+  if (!iso) return null;
+  const soon = iso.slice(0, 10) > isoDay(new Date());
+  return (
+    <span
+      className={`absolute bottom-1 left-1 max-w-[90%] truncate rounded px-1 py-[1px] text-[9.5px] font-bold leading-tight shadow ${
+        soon ? 'bg-lb-blue text-bg-0' : 'bg-black/75 text-ink-0'
+      }`}
+    >
+      {fmtDate(iso)}
+    </span>
   );
 }
 
