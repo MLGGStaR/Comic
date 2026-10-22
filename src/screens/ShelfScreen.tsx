@@ -33,8 +33,8 @@ const SORTS: Record<Shelf, [ShelfSort, string][]> = {
     ['release', 'Release date'],
   ],
   wishlist: [
-    ['added', 'Recently added'],
     ['release', 'Release date'],
+    ['added', 'Recently added'],
     ['series', 'Series A→Z'],
     ['price', 'Cover price'],
   ],
