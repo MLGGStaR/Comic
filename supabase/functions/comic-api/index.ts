@@ -25,6 +25,10 @@ const CORS = {
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
 
+/** Upcoming and just-released comics change (delays, final covers): re-read them every 3 hours. */
+const coreTtl = (c: { releaseDate?: string | null }) =>
+  !c.releaseDate || c.releaseDate >= new Date(Date.now() - 14 * DAY).toISOString().slice(0, 10) ? 3 * HOUR : 12 * HOUR;
+
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
@@ -60,7 +64,7 @@ Deno.serve(async (req) => {
       case 'comic': {
         const id = p('id');
         if (!/^\d+$/.test(id)) return json({ error: 'bad id' }, 400);
-        const core = await cached(`core:${id}`, 12 * HOUR, () => locg.comic(id, hint()), { force });
+        const core = await cached(`core:${id}`, coreTtl, () => locg.comic(id, hint()), { force });
         return json(await withCustomCovers(core));
       }
       case 'extras': {
@@ -330,7 +334,7 @@ const numOf = (l: Lite) => (l.number && /^\d+$/.test(l.number) ? Number(l.number
 
 /** Every cover of one issue: main, catalogue variants, community photos. */
 async function coversOf(issue: Lite): Promise<Cand[]> {
-  const core = await cached(`core:${issue.id}`, 12 * HOUR, () => locg.comic(issue.id, hintOf(issue)));
+  const core = await cached(`core:${issue.id}`, coreTtl, () => locg.comic(issue.id, hintOf(issue)));
   const custom = await customCoversFor([issue.id]);
   const base = { issueId: issue.id, lite: issue };
   return [

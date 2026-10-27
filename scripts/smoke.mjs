@@ -50,6 +50,29 @@ const user = await (await fetch(`${BASE}/auth/v1/admin/users`, { method: 'POST',
 if (!user.id) throw new Error(`create user failed: ${JSON.stringify(user).slice(0, 200)}`);
 console.log(`test user ${email} — site ${SITE}`);
 
+// a wishlisted comic whose stored details went stale (LoCG later corrected
+// Daredevil #6's release date from 1999-02-03 to 1999-04-28)
+const STALE = {
+  id: '2212600',
+  title: 'Daredevil #6',
+  series: 'Daredevil',
+  seriesId: '111643',
+  number: '6',
+  format: 'issue',
+  publisher: 'Marvel Comics',
+  releaseDate: '1999-02-03',
+  cover: 'https://s3.amazonaws.com/comicgeeks/comics/covers/medium-2212600.jpg',
+  price: 2.5,
+};
+{
+  const r = await fetch(`${BASE}/rest/v1/comic_entries`, {
+    method: 'POST',
+    headers: { ...H, Prefer: 'return=minimal' },
+    body: JSON.stringify({ user_id: user.id, comic_id: STALE.id, wishlist: true, meta: STALE }),
+  });
+  if (!r.ok) throw new Error(`seed stale entry: ${r.status} ${await r.text()}`);
+}
+
 // a real barcode (Absolute Batman #2, cover A) rendered for the fake camera
 const barcodePng = await bwipjs.toBuffer({ bcid: 'upca', text: '761941385846 00211', scale: 4, height: 20, includetext: true, addongap: 9, paddingwidth: 40, paddingheight: 30, backgroundcolor: 'FFFFFF' });
 const barcodeDataUrl = `data:image/png;base64,${barcodePng.toString('base64')}`;
@@ -116,6 +139,17 @@ try {
     await page.locator('nav button[aria-label="Home"]').waitFor({ timeout: 15000 });
     await settle(1500);
     await screen('01-home-empty');
+  });
+
+  await check('stale comic details refresh by themselves (Daredevil #6 → corrected date)', async () => {
+    let meta = null;
+    for (let i = 0; i < 40; i++) {
+      const rows = await (await fetch(`${BASE}/rest/v1/comic_entries?user_id=eq.${user.id}&comic_id=eq.${STALE.id}&select=meta`, { headers: H })).json();
+      meta = rows[0]?.meta;
+      if (meta?.releaseDate !== STALE.releaseDate) break;
+      await page.waitForTimeout(1000);
+    }
+    if (meta?.releaseDate !== '1999-04-28') throw new Error(`still ${meta?.releaseDate}`);
   });
 
   await check('search: absolute batman #2 → top result', async () => {

@@ -121,6 +121,8 @@ function weekTtl(date: string): number {
 export const api = {
   search: (q: string) => cachedCall<SearchResult>('search', { q: q.trim().toLowerCase() }, 6 * HOUR),
   comic: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicDetail>('comic', comicParams(c), 12 * HOUR),
+  /** The comic as the server has it now (skips this phone's cached copy). */
+  comicNow: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicDetail>('comic', comicParams(c), 0),
   extras: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicExtras>('extras', comicParams(c), 12 * HOUR),
   series: (id: string) => cachedCall<SeriesDetail>('series', { id }, 6 * HOUR),
   week: (date: string) => cachedCall<ComicLite[]>('week', { date }, weekTtl(date)),

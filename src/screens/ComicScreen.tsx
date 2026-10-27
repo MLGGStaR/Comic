@@ -9,6 +9,7 @@ import { estimateFor } from '../state/values';
 import type { ComicDetail, ComicLite, OwnedVariant, Variant, Review } from '../types';
 import { GradeSheet, gradeLabel } from '../ui/GradeSheet';
 import { useCollectsOf } from '../state/collects';
+import { toLite } from '../lib/snapshot';
 import { AddCoverSheet, CoverPicker, allCovers, coversChanged, toggleOwnedCover } from '../ui/CoverPicker';
 import { Screen } from '../ui/Screen';
 import { Cover } from '../ui/Cover';
@@ -141,24 +142,6 @@ export function ComicScreen({ id, seed, onClose }: { id: string; seed?: ComicLit
       {zoom ? <Zoom src={zoom.src} title={zoom.title} comicId={id} variant={zoom.variant} onClose={() => setZoom(null)} /> : null}
     </Screen>
   );
-}
-
-export function toLite(d: ComicDetail): ComicLite {
-  return {
-    id: d.id,
-    title: d.title,
-    series: d.series,
-    seriesId: d.seriesId,
-    number: d.number,
-    format: d.format,
-    formatLabel: d.formatLabel ?? null,
-    publisher: d.publisher,
-    releaseDate: d.releaseDate,
-    cover: d.cover,
-    price: d.price,
-    pulls: d.pulls ?? null,
-    rating: d.rating ?? null,
-  };
 }
 
 /** The cover drawn into a tiny canvas and stretched: the smooth upscale IS the

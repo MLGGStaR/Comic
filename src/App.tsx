@@ -8,6 +8,7 @@ import { collection, useCollection } from './state/collection';
 import { loadFollows } from './state/follows';
 import { portfolio } from './lib/shelf';
 import { migrateValues } from './state/values';
+import { refreshSnapshots } from './state/freshness';
 import { BUILD, checkForUpdate } from './lib/update';
 import { recordValue } from './ui/ValueSparkline';
 import { loadProfiles, useProfiles } from './state/profiles';
@@ -100,6 +101,14 @@ function Shell() {
   useEffect(() => {
     if (!selfId || !collectionLoaded || syncing) return;
     const t = window.setTimeout(() => void migrateValues([...collection.get().entries.values()]), 3000);
+    return () => window.clearTimeout(t);
+  }, [selfId, collectionLoaded, syncing]);
+
+  // keep your comics' details current (delays, final covers…) after every
+  // sync — at launch and whenever the app comes back to the foreground
+  useEffect(() => {
+    if (!selfId || !collectionLoaded || syncing) return;
+    const t = window.setTimeout(() => void refreshSnapshots([...collection.get().entries.values()]), 5000);
     return () => window.clearTimeout(t);
   }, [selfId, collectionLoaded, syncing]);
   useEffect(() => {

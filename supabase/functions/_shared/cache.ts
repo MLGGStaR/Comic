@@ -52,9 +52,11 @@ export async function cachePut(key: string, data: unknown): Promise<void> {
   }
 }
 
-export async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, opts?: { force?: boolean }): Promise<T> {
+/** `ttlMs` may depend on what was cached (e.g. upcoming comics change more often). */
+export async function cached<T>(key: string, ttlMs: number | ((data: T) => number), fn: () => Promise<T>, opts?: { force?: boolean }): Promise<T> {
   const hit = await cacheGet<T>(key);
-  if (hit && !opts?.force && Date.now() - hit.at < ttlMs) return hit.data;
+  const ttl = hit ? (typeof ttlMs === 'function' ? ttlMs(hit.data) : ttlMs) : 0;
+  if (hit && !opts?.force && Date.now() - hit.at < ttl) return hit.data;
   try {
     const data = await fn();
     await cachePut(key, data);
