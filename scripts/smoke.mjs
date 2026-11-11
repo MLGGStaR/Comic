@@ -38,6 +38,8 @@ const check = async (name, fn) => {
   } catch (e) {
     fails.push(`${name}: ${String(e.message).split('\n')[0]}`);
     console.log(`FAIL  ${name} — ${String(e.message).split('\n')[0]}`);
+    // Playwright's call log says why (e.g. which element intercepts the tap)
+    for (const l of String(e.message).split('\n').slice(1, 14)) if (l.trim()) console.log(`        ${l.trim()}`);
     await page?.screenshot({ path: path.join(OUT, `FAIL-${name.replace(/[^a-z0-9]+/gi, '-').slice(0, 40)}.png`) }).catch(() => {});
   }
 };
@@ -389,6 +391,27 @@ try {
     if (await page.locator('.screen-in').count()) throw new Error('screen still open after back');
     if (!page.url().includes('/Comic/')) throw new Error(`left the app: ${page.url()}`);
     await page.locator('#search-input').waitFor({ timeout: 3000 });
+  });
+
+  await check('Users tab: everyone, with their comics, read, wishlist and value', async () => {
+    await tab('Users');
+    const me = page.locator('.card', { hasText: 'YOU' }).first();
+    await me.getByText(/^[0-9]+ comics? tracked$/).waitFor({ timeout: 15000 });
+    // another collector's card is live: their numbers load and open their shelves
+    const other = page.locator('.card', { hasText: 'MLGGStaR' }).first();
+    await other.getByRole('button', { name: /^MLGGStaR · Comics [1-9]/ }).waitFor({ timeout: 30000 });
+    await settle(600);
+    await screen('17-users');
+    await other.getByRole('button', { name: /^MLGGStaR · Wishlist/ }).click();
+    await page.locator('.screen-in').last().getByText('Wishlist', { exact: true }).first().waitFor({ timeout: 10000 });
+    await settle(700); // pages ignore taps while they slide in
+    await page.locator('.screen-in').last().getByRole('button', { name: 'Back', exact: true }).click();
+    await settle(500);
+    await other.getByRole('button', { name: /^MLGGStaR · Value/ }).click();
+    await page.locator('.screen-in').last().getByText('Estimated value').waitFor({ timeout: 10000 });
+    await settle(700);
+    await page.locator('.screen-in').last().getByRole('button', { name: 'Back', exact: true }).click();
+    await settle(500);
   });
 
   await check('settings sheet', async () => {

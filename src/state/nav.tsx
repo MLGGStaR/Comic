@@ -11,7 +11,6 @@ export type Route =
   | { t: 'shelf'; shelf: Shelf; userId: string }
   | { t: 'portfolio'; userId: string }
   | { t: 'profile'; userId: string }
-  | { t: 'friends' }
   | { t: 'stats'; userId: string };
 
 export function routeKey(r: Route): string {
@@ -25,8 +24,6 @@ export function routeKey(r: Route): string {
     case 'profile':
     case 'stats':
       return `${r.t}:${r.userId}`;
-    default:
-      return r.t;
   }
 }
 

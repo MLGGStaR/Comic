@@ -22,24 +22,25 @@ import { HomeView } from './views/Home';
 import { SearchView } from './views/Search';
 import { CalendarView } from './views/Calendar';
 import { MyComicsView } from './views/MyComics';
+import { UsersView } from './views/Users';
 import { ComicScreen } from './screens/ComicScreen';
 import { SeriesScreen } from './screens/SeriesScreen';
 import { ShelfScreen } from './screens/ShelfScreen';
 import { PortfolioScreen } from './screens/PortfolioScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
-import { FriendsScreen } from './screens/FriendsScreen';
 import { StatsScreen } from './screens/StatsScreen';
 import { QuickLogSheet } from './sheets/QuickLog';
 import { AddMenu } from './sheets/AddMenu';
 import { SettingsSheet } from './sheets/Settings';
 import { Scanner } from './scan/Scanner';
 
-type Tab = 'home' | 'search' | 'calendar' | 'comics';
+type Tab = 'home' | 'search' | 'calendar' | 'comics' | 'users';
 const TABS: { id: Tab; icon: IconName; label: string }[] = [
   { id: 'home', icon: 'home', label: 'Home' },
   { id: 'search', icon: 'search', label: 'Search' },
   { id: 'calendar', icon: 'calendar', label: 'Calendar' },
   { id: 'comics', icon: 'box', label: 'My Comics' },
+  { id: 'users', icon: 'users', label: 'Users' },
 ];
 
 export function App() {
@@ -313,6 +314,8 @@ function Shell() {
               <SearchView />
             ) : tab === 'calendar' ? (
               <CalendarView />
+            ) : tab === 'users' ? (
+              <UsersView />
             ) : (
               <MyComicsView />
             )}
@@ -377,7 +380,7 @@ function Shell() {
           />
         ) : null}
         {scanMode ? <Scanner mode={scanMode} onMode={setScanMode} onClose={() => setScanMode(null)} /> : null}
-        {settingsOpen ? <SettingsSheet session={session} onClose={() => setSettingsOpen(false)} /> : null}
+        {settingsOpen ? <SettingsSheet session={session} onClose={() => setSettingsOpen(false)} onUsers={() => setTab('users')} /> : null}
         {needNewPassword && session ? <PasswordReset onDone={() => setNeedNewPassword(false)} /> : null}
         <Toasts />
       </div>
@@ -397,8 +400,6 @@ function RouteLayer({ route, onClose }: { route: Route; onClose: () => void }) {
       return <PortfolioScreen userId={route.userId} onClose={onClose} />;
     case 'profile':
       return <ProfileScreen userId={route.userId} onClose={onClose} />;
-    case 'friends':
-      return <FriendsScreen onClose={onClose} />;
     case 'stats':
       return <StatsScreen userId={route.userId} onClose={onClose} />;
   }

@@ -6,18 +6,16 @@ import { Sheet } from '../ui/Sheet';
 import { FriendDot } from '../ui/FriendDot';
 import { loadProfiles, useProfiles } from '../state/profiles';
 import { useCollection } from '../state/collection';
-import { useNav } from '../state/nav';
 import { Icon } from '../ui/Icon';
 import { BUILD, latestBuild, reloadInto } from '../lib/update';
 import { fullGuide, pcToken, setPcToken } from '../api/prices';
 import { collection } from '../state/collection';
 import { refreshValues } from '../state/values';
 
-export function SettingsSheet({ session, onClose }: { session: Session | null; onClose: () => void }) {
+export function SettingsSheet({ session, onClose, onUsers }: { session: Session | null; onClose: () => void; onUsers: () => void }) {
   const profiles = useProfiles();
   const me = session ? profiles.find((p) => p.id === session.user.id) : undefined;
   const { entries, syncing } = useCollection();
-  const nav = useNav();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -76,13 +74,13 @@ export function SettingsSheet({ session, onClose }: { session: Session | null; o
       <button
         onClick={() => {
           onClose();
-          window.setTimeout(() => nav.push({ t: 'friends' }), 60);
+          onUsers();
         }}
         className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-bg-2/70 active:bg-bg-2 mb-2"
       >
         <Icon name="users" size={20} className="text-lb-blue" />
-        <span className="flex-1 text-left text-sm font-semibold">Friends</span>
-        <span className="text-xs text-ink-2">{Math.max(0, profiles.length - (me ? 1 : 0))}</span>
+        <span className="flex-1 text-left text-sm font-semibold">Users</span>
+        <span className="text-xs text-ink-2">{profiles.length}</span>
         <Icon name="chevron-right" size={16} className="text-ink-2" />
       </button>
 
