@@ -178,10 +178,10 @@ function TopResult({ hit }: { hit: SearchHit }) {
       </button>
     );
   }
-  return <TopComic comic={hit.comic} />;
+  return <TopComic comic={hit.comic} note={hit.note} />;
 }
 
-function TopComic({ comic }: { comic: ComicLite }) {
+function TopComic({ comic, note }: { comic: ComicLite; note?: string | null }) {
   const a = useActions();
   const press = usePress(
     () => a.openComic(comic),
@@ -196,7 +196,7 @@ function TopComic({ comic }: { comic: ComicLite }) {
         </div>
         <div className="min-w-0 flex-1 py-1">
           <div className={`text-[10px] uppercase tracking-[0.16em] font-bold ${comic.format === 'collection' ? 'text-lb-orange' : 'text-lb-green'}`}>
-            {comic.format === 'collection' ? comic.formatLabel ?? 'Collected edition' : 'Issue'}
+            {note ?? (comic.format === 'collection' ? comic.formatLabel ?? 'Collected edition' : 'Issue')}
             {soon ? <span className="text-lb-blue"> · coming {fmtDate(comic.releaseDate)}</span> : null}
           </div>
           <div className="font-display text-[21px] font-extrabold leading-tight mt-1 line-clamp-3">{comic.title}</div>
@@ -248,6 +248,7 @@ function MoreRow({ hit }: { hit: SearchHit }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold truncate">{c?.title ?? s!.title}</div>
+        {hit.kind === 'comic' && hit.note ? <div className="text-[11px] text-lb-blue font-semibold truncate">{hit.note}</div> : null}
         <div className="text-[11px] text-ink-2 truncate">
           {c
             ? [c.format === 'collection' ? c.formatLabel ?? 'Collected' : null, c.publisher, fmtDate(c.releaseDate, { year: true })].filter(Boolean).join(' · ')

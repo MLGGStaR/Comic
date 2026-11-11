@@ -2,6 +2,7 @@
 //   GET  ?op=search&q=absolute batman #2
 //   GET  ?op=comic&id=8081353&title=…&seriesId=…      (fast: detail + every cover)
 //   GET  ?op=extras&id=8081353&title=…&seriesId=…     (reviews, scores, credits, prev/next)
+//   GET  ?op=contents&id=5044750&title=…&date=…        (the single issues an edition reprints)
 //   GET  ?op=series&id=178012
 //   GET  ?op=week&date=2026-09-23
 //   GET  ?op=upc&code=76194138584600211
@@ -16,6 +17,7 @@ import { normalize, parseQuery, type ParsedQuery } from '../_shared/query.ts';
 import { splitTitle, rankSeries } from '../_shared/locg.ts';
 import * as locg from './locgApi.ts';
 import { cbrForIssue } from './cbrApi.ts';
+import { parseCollects, type CollectsRef } from '../_shared/collects.ts';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -49,7 +51,15 @@ Deno.serve(async (req) => {
       case 'search': {
         const q = normalize(p('q'));
         if (q.length < 2) return json({ top: null, more: [] });
-        return json(await cached(`search3:${q}`, 6 * HOUR, () => locg.search(q), { force }));
+        return json(await cached(`search5:${q}`, 6 * HOUR, () => searchWithStories(q), { force }));
+      }
+      case 'contents': {
+        // the single issues a collected edition reprints
+        const id = p('id');
+        if (!/^\d+$/.test(id) || !p('title')) return json({ error: 'bad id' }, 400);
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(p('date')) ? p('date') : null;
+        const item = { key: id, title: p('title'), publisher: p('publisher') || null, date };
+        return json(await cached(`contents:${id}`, contentsTtl, () => contentsOf(item, date, userId(req) ?? 'public'), { force }));
       }
       case 'series': {
         const id = p('id');
@@ -300,6 +310,110 @@ async function collectedIssues(uid: string, items: Item[]) {
   const later = verify.slice(0, 6);
   if (later.length && (await budget('collects-verify', 6))) background(verifyOnline(later, prior));
   return out;
+}
+
+// ── what an edition / story is made of, as single issues ────────────────────
+// "Batman: Year One" never had single issues of its own — it ran in Batman
+// #404–407. A collected edition's "collects" text is resolved to the actual
+// issues (the same volume throughout, never newer than the edition).
+const flatT = (s: string) => normalize(s).replace(/^the\s+/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const sameNum = (a: string | null | undefined, b: string) => !!a && a.toLowerCase().replace(/^0+(?=\d)/, '') === b.toLowerCase().replace(/^0+(?=\d)/, '');
+const plusDays = (iso: string, d: number) => new Date(Date.parse(`${iso}T12:00:00Z`) + d * DAY).toISOString().slice(0, 10);
+
+async function mapLimit<T, R>(xs: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(xs.length);
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(n, xs.length) }, async () => {
+      while (i < xs.length) {
+        const k = i++;
+        out[k] = await fn(xs[k]);
+      }
+    }),
+  );
+  return out;
+}
+
+/** One run's issues in order (null where it can't be pinned down). `before`: the
+ *  edition's date — what it reprints can't be newer (a little slack for cover dates). */
+async function resolveRef(ref: CollectsRef, before: string | null): Promise<(Lite | null)[]> {
+  const limit = before ? plusDays(before, 90) : null;
+  const ok = (c: Lite | null | undefined, n: string): c is Lite => !!c && sameNum(c.number, n) && (!limit || !c.releaseDate || c.releaseDate <= limit);
+  const viaSearch = async (n: string, year: number | null) => {
+    const q = normalize(`${ref.series}${year ? ` (${year})` : ''} #${n}`);
+    const r = await cached(`search3:${q}`, 6 * HOUR, () => locg.search(q)).catch(() => null);
+    const c = r?.top?.kind === 'comic' ? r.top.comic : null;
+    return ok(c, n) ? c : null;
+  };
+  // the first issue finds the volume (with the edition's year as a fallback hint)…
+  const first = ref.numbers[0];
+  let anchor = await viaSearch(first, ref.year);
+  if (!anchor && !ref.year && before) anchor = await viaSearch(first, Number(before.slice(0, 4)));
+  if (!anchor?.seriesId) return ref.numbers.map((n) => (n === first ? anchor : null));
+  // …and the rest come from that same volume
+  const card = { id: anchor.seriesId, title: anchor.series ?? ref.series, publisher: anchor.publisher, years: null, count: null, cover: null };
+  const rest = await mapLimit(ref.numbers.slice(1), 6, async (n) => {
+    const p = parseQuery(`${card.title} #${n}`);
+    const hit = await cached(`issue:${card.id}:${n}`, 12 * HOUR, async () => (await locg.findIssue(card, p)) ?? { none: true as const }).catch(() => null);
+    return hit && !('none' in hit) && ok(hit, n) ? hit : null;
+  });
+  return [anchor, ...rest];
+}
+
+interface Contents {
+  collects: string | null; // "Batman #404–407"
+  issues: Lite[]; // resolved, in order
+  missing: number; // listed but not found
+}
+
+async function contentsOf(item: Item, before: string | null, uid: string): Promise<Contents> {
+  const got = (await collectedIssues(uid, [item]))[item.key];
+  const refs = parseCollects(got?.collects ?? null);
+  const total = refs.reduce((s, r) => s + r.numbers.length, 0);
+  if (!refs.length || total > 60) return { collects: got?.collects ?? null, issues: [], missing: total };
+  const resolved = (await mapLimit(refs, 2, (r) => resolveRef(r, before))).flat();
+  const seen = new Set<string>();
+  const issues = resolved.filter((c): c is Lite => !!c && !seen.has(c.id) && !!seen.add(c.id));
+  return { collects: got!.collects, issues, missing: total - issues.length };
+}
+
+const contentsTtl = (c: Contents) => (!c.issues.length ? 6 * HOUR : c.missing ? 2 * DAY : 7 * DAY);
+
+/** Search, plus stories that live inside another run: when the title's own
+ *  series has no single issues ("Batman: Year One" is only a paperback), show
+ *  the issues it was published in — "#2" is its 2nd chapter. */
+async function searchWithStories(q: string) {
+  const res = await cached(`search3:${q}`, 6 * HOUR, () => locg.search(q));
+  const p = parseQuery(q);
+  if (p.kind === 'collection') return res;
+  const want = flatT(p.series);
+  if (res.top?.kind === 'comic' && flatT(res.top.comic.series ?? '') === want) return res;
+  const exact = [res.top, ...res.more].find((h) => h?.kind === 'series' && flatT(h.series.title) === want) as { kind: 'series'; series: { id: string; title: string } } | undefined;
+  if (!exact) return res;
+  const s = await cached(`series2:${exact.series.id}`, 12 * HOUR, () => locg.series(exact.series.id)).catch(() => null);
+  if (!s || s.issues.some((i) => i.number)) return res; // it has its own single issues
+  const seen = new Set<string>();
+  const editions = [...s.collections, ...s.issues].filter((e) => !seen.has(e.id) && !!seen.add(e.id));
+  if (!editions.length) return res;
+  const before = editions.map((e) => e.releaseDate).filter((d): d is string => !!d).sort()[0] ?? null;
+  const story = await cached(
+    `story:${want}`,
+    contentsTtl,
+    () => contentsOf({ key: `story:${want}`, title: `${exact.series.title} (the complete story, every chapter)`, publisher: null, date: before }, before, 'search'),
+  ).catch(() => null);
+  if (!story?.issues.length) return res;
+  const total = story.issues.length;
+  const chapters = story.issues.map((comic, i) => ({ kind: 'comic' as const, comic, note: `${exact.series.title} · part ${i + 1} of ${total}` }));
+  // the story's own edition leads; a partial or foreign one ("Batman: Hush 1. rész") follows the chapters
+  const own = flatT(splitTitle(editions[0].title).series) === want;
+  const edition = { kind: 'comic' as const, comic: editions[0], note: own ? `Collects ${story.collects}` : 'Collected edition' };
+  const rest = res.more.filter((h) => !(h.kind === 'series' && h.series.id === exact.series.id));
+  if (p.kind === 'issue') {
+    const n = Number(p.issue);
+    if (!Number.isInteger(n) || n < 1 || n > total) return res;
+    return { top: chapters[n - 1], more: [...chapters.filter((_, i) => i !== n - 1), edition, ...rest].slice(0, 12) };
+  }
+  return own ? { top: edition, more: [...chapters, ...rest].slice(0, 14) } : { top: chapters[0], more: [...chapters.slice(1), edition, ...rest].slice(0, 14) };
 }
 
 // ── cover scans ─────────────────────────────────────────────────────────────

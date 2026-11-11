@@ -267,6 +267,29 @@ try {
     await settle();
   });
 
+  await check('a story with no single issues of its own (Batman: Year One → Batman #404–407)', async () => {
+    await page.locator('#search-input').fill('batman year one');
+    await page.getByText('Batman: Year One · part 1 of 4').waitFor({ timeout: 60000 });
+    await page.getByText('Batman: Year One · part 4 of 4').waitFor({ timeout: 5000 });
+    await settle(500);
+    await screen('07c-search-story');
+    await page.locator('#search-input').fill('batman year one #2');
+    await page.getByRole('button', { name: /Batman #405/ }).first().waitFor({ timeout: 60000 });
+    // the paperback's page lists the issues it reprints
+    await page.locator('#search-input').fill('batman year one');
+    await page.getByRole('button', { name: /Batman: Year One TP/ }).first().waitFor({ timeout: 30000 });
+    await settle(500);
+    await page.getByRole('button', { name: /Batman: Year One TP/ }).first().click();
+    const top = page.locator('.screen-in').last();
+    const card = top.locator('div.rounded-2xl', { hasText: 'Collects' }).first();
+    await card.getByText('#407', { exact: true }).waitFor({ timeout: 60000 });
+    await card.scrollIntoViewIfNeeded();
+    await settle(400);
+    await screen('07d-trade-contents');
+    await top.getByRole('button', { name: 'Back' }).click();
+    await settle();
+  });
+
   await check('calendar: month grid + day list', async () => {
     await tab('Calendar');
     await page.locator('button[aria-label$="releases"]').first().waitFor({ timeout: 20000 });

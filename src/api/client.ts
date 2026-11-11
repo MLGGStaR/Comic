@@ -62,7 +62,7 @@ async function fetchJson<T>(op: string, params: Record<string, string>, init?: R
 type Cached<T> = { t: number; data: T };
 // comic lookups carry hints (title, series) that shouldn't split the cache
 const cacheKey = (op: string, params: Record<string, string>) =>
-  op === 'comic' || op === 'extras' ? `api:${op}:${params.id}` : `api:${op}:${JSON.stringify(params)}`;
+  op === 'comic' || op === 'extras' ? `api:${op}:${params.id}` : op === 'search' ? `api:search2:${JSON.stringify(params)}` : `api:${op}:${JSON.stringify(params)}`;
 
 // one network request per key at a time (a prefetch and the page asking together)
 const inflight = new Map<string, Promise<unknown>>();
@@ -123,6 +123,13 @@ export const api = {
   comic: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicDetail>('comic', comicParams(c), 12 * HOUR),
   /** The comic as the server has it now (skips this phone's cached copy). */
   comicNow: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicDetail>('comic', comicParams(c), 0),
+  /** The single issues a collected edition reprints, in order. */
+  contents: (c: ComicLite) =>
+    cachedCall<{ collects: string | null; issues: ComicLite[]; missing: number }>(
+      'contents',
+      { id: c.id, title: c.title, ...(c.publisher ? { publisher: c.publisher } : {}), ...(c.releaseDate ? { date: c.releaseDate } : {}) },
+      24 * HOUR,
+    ),
   extras: (c: Pick<ComicLite, 'id'> & Partial<ComicLite>) => cachedCall<ComicExtras>('extras', comicParams(c), 12 * HOUR),
   series: (id: string) => cachedCall<SeriesDetail>('series', { id }, 6 * HOUR),
   week: (date: string) => cachedCall<ComicLite[]>('week', { date }, weekTtl(date)),

@@ -123,5 +123,5 @@ export interface SearchResult {
 }
 
 export type SearchHit =
-  | { kind: 'comic'; comic: ComicLite }
+  | { kind: 'comic'; comic: ComicLite; note?: string | null } // note: e.g. "Batman: Year One · part 1 of 4"
   | { kind: 'series'; series: { id: string; title: string; publisher: string | null; years: string | null; cover: string | null; count?: number | null } };

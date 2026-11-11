@@ -9,6 +9,7 @@ import { estimateFor } from '../state/values';
 import type { ComicDetail, ComicLite, OwnedVariant, Variant, Review } from '../types';
 import { GradeSheet, gradeLabel } from '../ui/GradeSheet';
 import { useCollectsOf } from '../state/collects';
+import { ComicTile, NumberTag } from '../ui/ComicTile';
 import { toLite } from '../lib/snapshot';
 import { AddCoverSheet, CoverPicker, allCovers, coversChanged, toggleOwnedCover } from '../ui/CoverPicker';
 import { Screen } from '../ui/Screen';
@@ -388,6 +389,19 @@ function CollectsRow({ comic }: { comic: ComicLite }) {
   const looked = useCollectsOf(comic);
   const [editing, setEditing] = useState(false);
   const [n, setN] = useState(6);
+  const [inside, setInside] = useState<ComicLite[] | null>(null);
+  useEffect(() => {
+    if (comic.format !== 'collection') return;
+    let alive = true;
+    api
+      .contents(comic)
+      .then((c) => alive && setInside(c.issues))
+      .catch(() => alive && setInside([]));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comic.id]);
   if (comic.format !== 'collection') return null;
   const mine = entry?.issues ?? null;
   const count = mine ?? looked?.issues ?? null;
@@ -447,6 +461,15 @@ function CollectsRow({ comic }: { comic: ComicLite }) {
               Use the looked-up count ({looked.issues})
             </button>
           ) : null}
+        </div>
+      ) : null}
+      {inside?.length ? (
+        <div className="flex gap-2 overflow-x-auto -mx-4 px-4 mt-3 pb-1" data-nodrag>
+          {inside.map((c) => (
+            <ComicTile key={c.id} comic={c} width={60}>
+              <NumberTag comic={c} />
+            </ComicTile>
+          ))}
         </div>
       ) : null}
     </div>

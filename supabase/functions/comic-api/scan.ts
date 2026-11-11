@@ -298,7 +298,7 @@ const COLLECTS_SCHEMA = {
           key: { type: 'string' },
           collects: {
             ...nullable('string'),
-            description: 'The single issues this edition reprints, as a catalogue lists them, e.g. "House of M #1–8" or "Absolute Batman #1–6". Null if you do not know this specific edition.',
+            description: 'The single issues this edition reprints, as a catalogue lists them, e.g. "House of M #1–8" or "Absolute Batman #1–6"; add the volume start year when several series share the name, e.g. "Batman (1940) #404–407". Null if you do not know this specific edition.',
           },
           issues: { ...nullable('integer'), description: 'How many single issues that is. Null when collects is null.' },
         },
@@ -349,7 +349,7 @@ export async function lookupCollectsOnline(item: { title: string; publisher: str
             `Search the web: the publisher's page (dc.com, marvel.com, imagecomics.com…), Penguin Random House, Amazon or a comic shop listing usually says "Collects … #7–12".`,
             `Count one-shots, annuals and specials as issues. Don't estimate from a typical volume size.`,
             `End your reply with exactly one line, either`,
-            `RESULT: {"collects": "<series> #<first>–<last>[, …]", "issues": <count>, "source": "<url>"}`,
+            `RESULT: {"collects": "<series> (<volume start year>) #<first>–<last>[, …]", "issues": <count>, "source": "<url>"}`,
             `or, if you could not find it: RESULT: null`,
           ].join('\n'),
         },
